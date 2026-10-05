@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Conduite manuelle et collecte d'un dataset LiDAR pour le LDROBOT D500.
+"""Conduite manuelle et collecte d'un dataset caméra + LiDAR pour le LDROBOT D500.
 
 Le D500 (STL-19P) est lu sur l'UART de la Jetson Nano à 230400 bauds.
 Chaque tour complet devient une ligne CSV avec les 180 distances du champ
-avant (de -90° à +90°), en mètres, et les commandes servo/duty de la voiture.
+avant (de -90° à +90°), en mètres, l'image stéréo prétraitée, la télémétrie
+VESC et les commandes servo/duty de la voiture.
 
 Branchement UART Jetson Nano : TX LiDAR -> broche 10 (UART RX), GND commun.
 La broche 8 (UART TX) n'est pas utilisée. Le D500 demande une alimentation
@@ -46,6 +47,14 @@ except ImportError:
     print("[ERROR] pyserial absent. Installe-le avec : pip install pyserial")
     sys.exit(1)
 
+try:
+    import cv2
+    import depthai as dai
+    from vision_preprocess import make_mask_stereo
+except ImportError as exc:
+    print(f"[ERROR] Dépendance caméra absente ({exc}). Installe OpenCV/DepthAI et vérifie vision_preprocess.py.")
+    sys.exit(1)
+
 
 # Configuration matériel et dataset
 GAMEPAD_TYPE = Gamepad.Xbox360
@@ -66,12 +75,22 @@ LIDAR_MAX_RANGE_M = 12.0
 LIDAR_BINS = 180
 PREVIEW_HOST = "0.0.0.0"
 PREVIEW_PORT = 5001
+CAMERA_FPS = 30
+CAMERA_SYNC_THRESHOLD_MS = 20.0
+CAMERA_TIMEOUT_S = 2.0
 
 MAX_DUTY_CYCLE = 0.10
 SERVO_CENTER = 0.5
 SERVO_RANGE = 0.48
+# À adapter au moteur et à la transmission montés sur la voiture.
+MOTOR_POLES = 10
+REDUCTION_RATIO = 1.0
+WHEEL_DIAMETER_M = 0.10
 PROJECT_DIR = Path(__file__).resolve().parents[1]
-DATASET_CSV = PROJECT_DIR / "dataset_lidar/driving_log.csv"
+DATASET_CSV = PROJECT_DIR / "dataset_lidar/driving_log_camera_lidar.csv"
+CSV_COLUMNS = [
+    "timestamp", "image_path", "servo", "duty", "erpm", "rpm_mechanical", "speed_kmh", "lidar"
+]
 
 PACKET_HEADER = 0x54
 PACKET_VERLEN = 0x2C
@@ -185,6 +204,50 @@ class D500Reader:
             last_angle = angle
 
 
+def build_camera_pipeline():
+    """Construit le flux mono stéréo utilisé aussi par l'autopilot caméra + LiDAR."""
+    pipeline = dai.Pipeline()
+    for socket, stream in ((dai.CameraBoardSocket.CAM_B, "left"),
+                           (dai.CameraBoardSocket.CAM_C, "right")):
+        camera = pipeline.create(dai.node.MonoCamera)
+        camera.setBoardSocket(socket)
+        camera.setResolution(dai.MonoCameraProperties.SensorResolution.THE_480_P)
+        camera.setFps(CAMERA_FPS)
+        output = pipeline.create(dai.node.XLinkOut)
+        output.setStreamName(stream)
+        output.input.setBlocking(False)
+        output.input.setQueueSize(4)
+        camera.out.link(output.input)
+    return pipeline
+
+
+def read_synchronized_camera_pair(q_left, q_right, timeout_s=CAMERA_TIMEOUT_S):
+    """Récupère une paire CAM_B/CAM_C dont les horodatages sont proches."""
+    left = right = None
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if left is None:
+            left = q_left.tryGet()
+        if right is None:
+            right = q_right.tryGet()
+        if left is not None and right is not None:
+            left_time = left.getTimestampDevice().total_seconds()
+            right_time = right.getTimestampDevice().total_seconds()
+            delta_ms = abs(left_time - right_time) * 1000.0
+            if delta_ms <= CAMERA_SYNC_THRESHOLD_MS:
+                return left.getCvFrame(), right.getCvFrame()
+            if left_time < right_time:
+                left = None
+            else:
+                right = None
+        else:
+            time.sleep(0.001)
+    raise RuntimeError(
+        f"Paire de caméras non synchronisée après {timeout_s:.1f} s "
+        f"(seuil {CAMERA_SYNC_THRESHOLD_MS:.0f} ms)."
+    )
+
+
 def clamp(value: float, minimum: float, maximum: float) -> float:
     return max(minimum, min(maximum, value))
 
@@ -194,6 +257,41 @@ def apply_deadzone(value: float) -> float:
         return 0.0
     sign = 1.0 if value > 0 else -1.0
     return sign * (abs(value) - DEADZONE) / (1.0 - DEADZONE)
+
+
+def calculer_vitesse_reel(
+    erpm: float,
+    poles_moteur: int,
+    ratio_reduction: float = 1.0,
+    diametre_roue_m: float = 0.0,
+) -> tuple[float, float | None]:
+    """Convertit les eRPM VESC en RPM moteur, et éventuellement en km/h."""
+    if poles_moteur <= 0 or poles_moteur % 2:
+        raise ValueError("Le nombre de pôles moteur doit être un entier positif pair.")
+    if ratio_reduction <= 0:
+        raise ValueError("Le ratio de réduction doit être supérieur à zéro.")
+    if diametre_roue_m < 0:
+        raise ValueError("Le diamètre de roue ne peut pas être négatif.")
+
+    rpm_mecanique = erpm / (poles_moteur / 2)
+    if diametre_roue_m == 0:
+        return rpm_mecanique, None
+
+    circonference = diametre_roue_m * math.pi
+    vitesse_kmh = (rpm_mecanique / ratio_reduction) * circonference * 60.0 / 1000.0
+    return rpm_mecanique, vitesse_kmh
+
+
+def read_vesc_speed(vesc, poles_moteur, ratio_reduction, diametre_roue_m):
+    """Lit les mesures via la connexion VESC déjà ouverte par pyvesc."""
+    measurements = vesc.get_measurements()
+    if measurements is None or not hasattr(measurements, "rpm"):
+        raise RuntimeError("Le VESC n'a pas renvoyé de mesure RPM valide.")
+    erpm = float(measurements.rpm)
+    rpm_mecanique, vitesse_kmh = calculer_vitesse_reel(
+        erpm, poles_moteur, ratio_reduction, diametre_roue_m
+    )
+    return erpm, rpm_mecanique, vitesse_kmh
 
 
 def connect_vesc():
@@ -216,12 +314,12 @@ def open_dataset(path: Path):
     handle = path.open("a", newline="", encoding="utf-8", buffering=1)
     writer = csv.writer(handle)
     if not exists:
-        writer.writerow(["timestamp", "servo", "duty", "lidar"])
+        writer.writerow(CSV_COLUMNS)
         handle.flush()
     else:
         with path.open("r", newline="", encoding="utf-8") as existing:
             header = next(csv.reader(existing), [])
-        if header != ["timestamp", "servo", "duty", "lidar"]:
+        if header != CSV_COLUMNS:
             handle.close()
             raise ValueError(
                 f"Le CSV {path} existe avec un format différent. "
@@ -230,7 +328,8 @@ def open_dataset(path: Path):
     return handle, writer
 
 
-preview_state = {"scan": [], "servo": SERVO_CENTER, "duty": 0.0, "recording": False,
+preview_state = {"scan": [], "servo": SERVO_CENTER, "duty": 0.0, "erpm": None,
+                 "rpm_mechanical": None, "speed_kmh": None, "recording": False,
                  "updated_at": None}
 preview_lock = threading.Lock()
 
@@ -267,7 +366,7 @@ function draw(s){const w=c.width,h=c.height,cx=w/2,cy=h-42,R=Math.min(w/2-30,h-8
 for(let m=1;m<=6;m++){let r=R*m/6;x.beginPath();x.arc(cx,cy,r,Math.PI,2*Math.PI);x.strokeStyle='#35424d';x.stroke();x.fillStyle='#aab7c1';x.font='13px system-ui';x.fillText(m+'m',cx+8,cy-r-4)}
 for(let a=-90;a<=90;a+=30){let t=a*Math.PI/180;x.beginPath();x.moveTo(cx,cy);x.lineTo(cx+Math.sin(t)*R,cy-Math.cos(t)*R);x.strokeStyle='#26333d';x.stroke()}
 (s.scan||[]).forEach((d,i)=>{if(!(d>0&&d<12))return;let a=(i-90)*Math.PI/180,r=R*Math.min(d,6)/6;x.beginPath();x.arc(cx+Math.sin(a)*r,cy-Math.cos(a)*r,3,0,Math.PI*2);x.fillStyle=d<1?'#ff645e':'#56d891';x.fill()});
-x.fillStyle='#8fbbe0';x.fillRect(cx-1,cy-R,2,R);status.textContent=`${s.recording?'REC':'MANUAL'} · servo ${Number(s.servo).toFixed(2)} · duty ${Number(s.duty).toFixed(3)} · updated ${s.updated_at||'waiting for scan'}`}
+x.fillStyle='#8fbbe0';x.fillRect(cx-1,cy-R,2,R);const speed=s.speed_kmh==null?'—':`${Number(s.speed_kmh).toFixed(1)} km/h`;const rpm=s.rpm_mechanical==null?'—':`${Number(s.rpm_mechanical).toFixed(0)} RPM`;const erpm=s.erpm==null?'—':`${Number(s.erpm).toFixed(0)} eRPM`;status.textContent=`${s.recording?'REC':'MANUAL'} · servo ${Number(s.servo).toFixed(2)} · duty ${Number(s.duty).toFixed(3)} · ${erpm} · ${rpm} · ${speed} · updated ${s.updated_at||'waiting for scan'}`}
 async function poll(){try{const r=await fetch('/scan',{cache:'no-store'});draw(await r.json())}catch(e){status.textContent='Connexion LiDAR perdue ; reconnexion…'}setTimeout(poll,150)}poll();
 const camera=document.querySelector('#camera'),cameraStatus=document.querySelector('#camera-status');camera.src=`http://${location.hostname}:9011/stream.mjpg`;camera.onerror=()=>cameraStatus.textContent='Caméra indisponible — vérifier oak_bridge.py';async function pollCameraStatus(){try{const d=await (await fetch(`http://${location.hostname}:9011/status`,{cache:'no-store'})).json();cameraStatus.textContent=d.ready?`Paire synchronisée · séq. ${d.sequence} · écart ${Number(d.left_right_delta_ms).toFixed(3)} ms / seuil ${d.sync_threshold_ms} ms`:'En attente des deux caméras'}catch(e){cameraStatus.textContent='Caméra indisponible — vérifier oak_bridge.py'}}setInterval(pollCameraStatus,500);pollCameraStatus();</script></html>""".encode("utf-8")
         self.send_response(200)
@@ -285,6 +384,12 @@ def parse_args():
                         help=f"CSV de sortie (défaut : {DATASET_CSV})")
     parser.add_argument("--vesc-port", default=VESC_PORT,
                         help=f"Port série VESC (défaut : {VESC_PORT})")
+    parser.add_argument("--motor-poles", type=int, default=MOTOR_POLES,
+                        help=f"Nombre de pôles moteur (défaut : {MOTOR_POLES})")
+    parser.add_argument("--reduction-ratio", type=float, default=REDUCTION_RATIO,
+                        help=f"Ratio moteur/roue (défaut : {REDUCTION_RATIO})")
+    parser.add_argument("--wheel-diameter", type=float, default=WHEEL_DIAMETER_M,
+                        help="Diamètre de roue en mètres ; 0 désactive le calcul km/h")
     parser.add_argument("--preview", action="store_true",
                         help="Démarre l'aperçu LiDAR accessible dans un navigateur (utile en SSH)")
     parser.add_argument("--preview-host", default=PREVIEW_HOST,
@@ -298,6 +403,12 @@ def main() -> int:
     global VESC_PORT
     args = parse_args()
     VESC_PORT = args.vesc_port
+    if args.motor_poles <= 0 or args.motor_poles % 2:
+        print("[ERROR] --motor-poles doit être un entier positif pair.")
+        return 2
+    if args.reduction_ratio <= 0 or args.wheel_diameter < 0:
+        print("[ERROR] --reduction-ratio doit être positif et --wheel-diameter positif ou nul.")
+        return 2
 
     preview_server = None
     if args.preview:
@@ -333,15 +444,25 @@ def main() -> int:
 
         dataset_handle, csv_writer = open_dataset(args.csv)
         vesc = connect_vesc()
-        with vesc:
+        with vesc, dai.Device(build_camera_pipeline()) as camera:
+            q_left = camera.getOutputQueue(name="left", maxSize=4, blocking=False)
+            q_right = camera.getOutputQueue(name="right", maxSize=4, blocking=False)
             vesc.set_servo(SERVO_CENTER)
             vesc.set_duty_cycle(0.0)
-            print("\n=== COLLECTEUR DATASET LiDAR D500 ===")
+            print("\n=== COLLECTEUR DATASET CAMÉRA + LiDAR D500 ===")
             print("RT : avancer | LT : reculer | joystick gauche : direction")
             print("A : démarrer/arrêter l'enregistrement | LB : arrêt immédiat")
+            print(
+                f"Vitesse : {args.motor_poles} pôles, ratio {args.reduction_ratio:g}, "
+                + (f"roue {args.wheel_diameter:g} m" if args.wheel_diameter > 0
+                   else "km/h désactivé (diamètre de roue non renseigné)")
+            )
             if args.preview:
                 print(f"Aperçu web : http://<adresse-du-robot>:{args.preview_port}/")
-            print(f"CSV : {args.csv} | UART LiDAR : {args.lidar_port} @ {LIDAR_BAUDRATE}")
+            print(
+                f"CSV : {args.csv} | UART LiDAR : {args.lidar_port} @ {LIDAR_BAUDRATE} "
+                f"| caméras OAK-D @ {CAMERA_FPS} FPS"
+            )
 
             try:
                 while gamepad.isConnected():
@@ -365,24 +486,48 @@ def main() -> int:
                     vesc.set_duty_cycle(duty)
                     vesc.set_servo(servo)
 
-                    # Les commandes restent stables pendant l'acquisition du tour,
-                    # elles décrivent donc bien le scan associé dans le CSV.
+                    # Les commandes restent stables pendant l'acquisition du scan.
                     scan = lidar.read_scan()
+                    left_frame, right_frame = read_synchronized_camera_pair(q_left, q_right)
+                    image = make_mask_stereo(left_frame, right_frame)
+
+                    # Le VESC est déjà ouvert par pyvesc : pas de second accès au port série.
+                    try:
+                        erpm, rpm_mecanique, vitesse_kmh = read_vesc_speed(
+                            vesc, args.motor_poles, args.reduction_ratio, args.wheel_diameter
+                        )
+                    except Exception as exc:
+                        erpm = rpm_mecanique = vitesse_kmh = None
+                        print(f"\n[WARNING] Lecture vitesse VESC indisponible : {exc}")
 
                     if args.preview:
                         with preview_lock:
                             preview_state.update({
                                 "scan": scan, "servo": servo, "duty": duty,
+                                "erpm": erpm, "rpm_mechanical": rpm_mecanique,
+                                "speed_kmh": vitesse_kmh,
                                 "recording": recording,
                                 "updated_at": datetime.now().isoformat(timespec="seconds"),
                             })
 
                     if recording:
-                        timestamp = datetime.now().isoformat(timespec="milliseconds")
+                        sample_time = datetime.now()
+                        timestamp = sample_time.isoformat(timespec="milliseconds")
+                        image_name = f"frame_{sample_time:%Y%m%d_%H%M%S_%f}.png"
+                        image_dir = args.csv.parent / "images"
+                        image_dir.mkdir(parents=True, exist_ok=True)
+                        image_file = image_dir / image_name
+                        if not cv2.imwrite(str(image_file), image):
+                            raise OSError(f"Impossible d'enregistrer l'image : {image_file}")
+                        image_path = (Path("images") / image_name).as_posix()
                         csv_writer.writerow([
                             timestamp,
+                            image_path,
                             f"{servo:.4f}",
                             f"{duty:.4f}",
+                            "" if erpm is None else f"{erpm:.1f}",
+                            "" if rpm_mecanique is None else f"{rpm_mecanique:.1f}",
+                            "" if vitesse_kmh is None else f"{vitesse_kmh:.3f}",
                             json.dumps(scan, separators=(",", ":")),
                         ])
                         dataset_handle.flush()
@@ -391,9 +536,15 @@ def main() -> int:
                     nearest = min(valid_ranges) if valid_ranges else math.inf
                     nearest_text = f"{nearest:.2f} m" if math.isfinite(nearest) else "aucun retour"
                     mode = "REC" if recording else "MANUEL"
+                    if erpm is None:
+                        speed_text = "vitesse VESC indisponible"
+                    else:
+                        speed_text = f"{erpm:.0f} eRPM / {rpm_mecanique:.0f} RPM"
+                        if vitesse_kmh is not None:
+                            speed_text += f" / {vitesse_kmh:.1f} km/h"
                     print(
                         f"\r[{mode}] servo={servo:.2f} duty={duty:.3f} "
-                        f"obstacle avant le plus proche={nearest_text}   ",
+                        f"{speed_text} obstacle avant le plus proche={nearest_text}   ",
                         end="",
                         flush=True,
                     )

@@ -24,7 +24,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from camera_lidar_model import CameraLidarBehavioralCloning
 from vision_preprocess import resize_for_model
 
-DEFAULT_CSV = SCRIPT_DIR / "dataset" / "driving_log.csv"
+DEFAULT_CSV = PROJECT_DIR / "dataset_lidar" / "driving_log_camera_lidar.csv"
 HISTORY = 3
 
 try:
@@ -37,7 +37,7 @@ except Exception as exc:
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--csv", type=Path, default=DEFAULT_CSV,
-                        help="CSV caméra + LiDAR produit par scripts/Behavioral_Cloning.py")
+                        help="CSV caméra + LiDAR produit par scripts/Behavioral_Cloning_Lidar.py")
     parser.add_argument("--scan-column", default=None)
     parser.add_argument("--max-range", type=float, default=12.0)
     parser.add_argument("--batch-size", type=int, default=32)
