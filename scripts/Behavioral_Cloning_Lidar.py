@@ -50,6 +50,7 @@ except ImportError:
 try:
     import cv2
     import depthai as dai
+    import numpy as np
     from vision_preprocess import prepare_camera_image
 except ImportError as exc:
     print(f"[ERROR] Dépendance caméra absente ({exc}). Installe OpenCV/DepthAI et vérifie vision_preprocess.py.")
@@ -236,7 +237,7 @@ def read_synchronized_camera_pair(q_left, q_right, timeout_s=CAMERA_TIMEOUT_S):
             right_time = right.getTimestampDevice().total_seconds()
             delta_ms = abs(left_time - right_time) * 1000.0
             if delta_ms <= CAMERA_SYNC_THRESHOLD_MS:
-                return left.getCvFrame(), right.getCvFrame()
+                return left.getCvFrame(), right.getCvFrame(), delta_ms
             if left_time < right_time:
                 left = None
             else:
@@ -331,7 +332,8 @@ def open_dataset(path: Path):
 
 preview_state = {"scan": [], "servo": SERVO_CENTER, "duty": 0.0, "erpm": None,
                  "rpm_mechanical": None, "speed_kmh": None, "recording": False,
-                 "updated_at": None}
+                 "updated_at": None, "camera_jpeg": None, "camera_sequence": 0,
+                 "camera_delta_ms": None}
 preview_lock = threading.Lock()
 
 
@@ -340,9 +342,52 @@ class LidarPreviewHandler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
+        if self.path == "/status":
+            with preview_lock:
+                payload = json.dumps({
+                    "ready": preview_state["camera_jpeg"] is not None,
+                    "sequence": preview_state["camera_sequence"],
+                    "left_right_delta_ms": preview_state["camera_delta_ms"],
+                    "sync_threshold_ms": CAMERA_SYNC_THRESHOLD_MS,
+                }, separators=(",", ":")).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
+        if self.path == "/stream.mjpg":
+            self.send_response(200)
+            self.send_header("Age", "0")
+            self.send_header("Cache-Control", "no-cache, private")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+            self.end_headers()
+            last_sequence = -1
+            try:
+                while True:
+                    with preview_lock:
+                        jpeg = preview_state["camera_jpeg"]
+                        sequence = preview_state["camera_sequence"]
+                    if jpeg is None or sequence == last_sequence:
+                        time.sleep(0.03)
+                        continue
+                    self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\n")
+                    self.wfile.write(f"Content-Length: {len(jpeg)}\r\n\r\n".encode("ascii"))
+                    self.wfile.write(jpeg)
+                    self.wfile.write(b"\r\n")
+                    last_sequence = sequence
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            except OSError:
+                pass
+            return
         if self.path == "/scan":
             with preview_lock:
-                payload = json.dumps(preview_state, separators=(",", ":")).encode("utf-8")
+                scan_state = {key: value for key, value in preview_state.items()
+                              if key != "camera_jpeg"}
+                payload = json.dumps(scan_state, separators=(",", ":")).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
@@ -369,7 +414,7 @@ for(let a=-90;a<=90;a+=30){let t=a*Math.PI/180;x.beginPath();x.moveTo(cx,cy);x.l
 (s.scan||[]).forEach((d,i)=>{if(!(d>0&&d<12))return;let a=(i-90)*Math.PI/180,r=R*Math.min(d,6)/6;x.beginPath();x.arc(cx+Math.sin(a)*r,cy-Math.cos(a)*r,3,0,Math.PI*2);x.fillStyle=d<1?'#ff645e':'#56d891';x.fill()});
 x.fillStyle='#8fbbe0';x.fillRect(cx-1,cy-R,2,R);const speed=s.speed_kmh==null?'—':`${Number(s.speed_kmh).toFixed(1)} km/h`;const rpm=s.rpm_mechanical==null?'—':`${Number(s.rpm_mechanical).toFixed(0)} RPM`;const erpm=s.erpm==null?'—':`${Number(s.erpm).toFixed(0)} eRPM`;status.textContent=`${s.recording?'REC':'MANUAL'} · servo ${Number(s.servo).toFixed(2)} · duty ${Number(s.duty).toFixed(3)} · ${erpm} · ${rpm} · ${speed} · updated ${s.updated_at||'waiting for scan'}`}
 async function poll(){try{const r=await fetch('/scan',{cache:'no-store'});draw(await r.json())}catch(e){status.textContent='Connexion LiDAR perdue ; reconnexion…'}setTimeout(poll,150)}poll();
-const camera=document.querySelector('#camera'),cameraStatus=document.querySelector('#camera-status');camera.src=`http://${location.hostname}:9011/stream.mjpg`;camera.onerror=()=>cameraStatus.textContent='Caméra indisponible — vérifier oak_bridge.py';async function pollCameraStatus(){try{const d=await (await fetch(`http://${location.hostname}:9011/status`,{cache:'no-store'})).json();cameraStatus.textContent=d.ready?`Paire synchronisée · séq. ${d.sequence} · écart ${Number(d.left_right_delta_ms).toFixed(3)} ms / seuil ${d.sync_threshold_ms} ms`:'En attente des deux caméras'}catch(e){cameraStatus.textContent='Caméra indisponible — vérifier oak_bridge.py'}}setInterval(pollCameraStatus,500);pollCameraStatus();</script></html>""".encode("utf-8")
+const camera=document.querySelector('#camera'),cameraStatus=document.querySelector('#camera-status');camera.src='/stream.mjpg';camera.onerror=()=>cameraStatus.textContent='Flux caméra indisponible';async function pollCameraStatus(){try{const d=await (await fetch('/status',{cache:'no-store'})).json();cameraStatus.textContent=d.ready?`Paire synchronisée · séq. ${d.sequence} · écart ${Number(d.left_right_delta_ms).toFixed(3)} ms / seuil ${d.sync_threshold_ms} ms`:'En attente des deux caméras'}catch(e){cameraStatus.textContent='Flux caméra indisponible'} }setInterval(pollCameraStatus,500);pollCameraStatus();</script></html>""".encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(page)))
@@ -397,6 +442,8 @@ def parse_args():
                         help=f"Adresse d'écoute de l'aperçu (défaut : {PREVIEW_HOST})")
     parser.add_argument("--preview-port", type=int, default=PREVIEW_PORT,
                         help=f"Port HTTP de l'aperçu (défaut : {PREVIEW_PORT})")
+    parser.add_argument("--jpeg-quality", type=int, default=95,
+                        help="Qualité JPEG des images enregistrées, de 1 à 100 (défaut : 95)")
     return parser.parse_args()
 
 
@@ -410,11 +457,15 @@ def main() -> int:
     if args.reduction_ratio <= 0 or args.wheel_diameter < 0:
         print("[ERROR] --reduction-ratio doit être positif et --wheel-diameter positif ou nul.")
         return 2
+    if not 1 <= args.jpeg_quality <= 100:
+        print("[ERROR] --jpeg-quality doit être compris entre 1 et 100.")
+        return 2
 
     preview_server = None
     if args.preview:
         try:
             preview_server = ThreadingHTTPServer((args.preview_host, args.preview_port), LidarPreviewHandler)
+            preview_server.daemon_threads = True
         except OSError as exc:
             print(f"[ERROR] Impossible de démarrer le serveur d'aperçu : {exc}")
             return 1
@@ -489,8 +540,9 @@ def main() -> int:
 
                     # Les commandes restent stables pendant l'acquisition du scan.
                     scan = lidar.read_scan()
-                    left_frame, right_frame = read_synchronized_camera_pair(q_left, q_right)
+                    left_frame, right_frame, camera_delta_ms = read_synchronized_camera_pair(q_left, q_right)
                     image = prepare_camera_image(left_frame)
+                    right_image = prepare_camera_image(right_frame)
 
                     # Le VESC est déjà ouvert par pyvesc : pas de second accès au port série.
                     try:
@@ -502,6 +554,12 @@ def main() -> int:
                         print(f"\n[WARNING] Lecture vitesse VESC indisponible : {exc}")
 
                     if args.preview:
+                        preview_frame = np.hstack((image, right_image))
+                        ok, jpeg_buffer = cv2.imencode(
+                            ".jpg", preview_frame, [cv2.IMWRITE_JPEG_QUALITY, 80]
+                        )
+                        if not ok:
+                            raise RuntimeError("Impossible d'encoder l'image de preview.")
                         with preview_lock:
                             preview_state.update({
                                 "scan": scan, "servo": servo, "duty": duty,
@@ -509,21 +567,25 @@ def main() -> int:
                                 "speed_kmh": vitesse_kmh,
                                 "recording": recording,
                                 "updated_at": datetime.now().isoformat(timespec="seconds"),
+                                "camera_jpeg": jpeg_buffer.tobytes(),
+                                "camera_sequence": preview_state["camera_sequence"] + 1,
+                                "camera_delta_ms": camera_delta_ms,
                             })
 
                     if recording:
                         sample_time = datetime.now()
                         timestamp = sample_time.isoformat(timespec="milliseconds")
-                        image_name = f"frame_{sample_time:%Y%m%d_%H%M%S_%f}.png"
+                        image_name = f"frame_{sample_time:%Y%m%d_%H%M%S_%f}.jpg"
                         image_dir = args.csv.parent / "images"
                         image_dir.mkdir(parents=True, exist_ok=True)
                         left_image_name = f"left_{image_name}"
                         right_image_name = f"right_{image_name}"
                         left_image_file = image_dir / left_image_name
                         right_image_file = image_dir / right_image_name
-                        if not cv2.imwrite(str(left_image_file), image):
+                        encode_params = [cv2.IMWRITE_JPEG_QUALITY, args.jpeg_quality]
+                        if not cv2.imwrite(str(left_image_file), image, encode_params):
                             raise OSError(f"Impossible d'enregistrer l'image : {left_image_file}")
-                        if not cv2.imwrite(str(right_image_file), prepare_camera_image(right_frame)):
+                        if not cv2.imwrite(str(right_image_file), right_image, encode_params):
                             raise OSError(f"Impossible d'enregistrer l'image : {right_image_file}")
                         csv_writer.writerow([
                             timestamp,
