@@ -43,19 +43,22 @@ def parse_args():
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--epochs", type=int, default=150)
     parser.add_argument("--learning-rate", type=float, default=2e-3)
-    parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
+    parser.add_argument(
+        "--device", choices=("gpu", "auto", "cpu", "cuda"), default="gpu",
+        help="gpu/auto : CUDA en priorité puis CPU si indisponible ; cpu : force le CPU ; cuda : exige CUDA",
+    )
     parser.add_argument("--model-out", type=Path, default=PROJECT_DIR / "model/camera_lidar_model.pth")
     parser.add_argument("--loss-plot-out", type=Path, default=PROJECT_DIR / "model/camera_lidar_loss_plot.png")
     return parser.parse_args()
 
 
 def select_device(preference: str) -> torch.device:
-    if preference == "gpu":
-        return torch.device("gpu")
+    if preference == "cpu":
+        return torch.device("cpu")
     if not torch.cuda.is_available():
         if preference == "cuda":
             raise RuntimeError("CUDA demandé, mais PyTorch ne détecte aucun GPU CUDA disponible.")
-        print("[WARNING] CUDA indisponible; entraînement sur CPU.")
+        print("[WARNING] GPU CUDA indisponible; repli sur CPU.")
         return torch.device("cpu")
     try:
         torch.empty(1, device="cuda")
@@ -64,7 +67,7 @@ def select_device(preference: str) -> torch.device:
     except Exception as exc:
         if preference == "cuda":
             raise RuntimeError(f"CUDA demandé mais inutilisable : {exc}") from exc
-        print(f"[WARNING] CUDA détecté mais inutilisable ({exc}); entraînement sur CPU.")
+        print(f"[WARNING] GPU CUDA détecté mais inutilisable ({exc}); repli sur CPU.")
         return torch.device("cpu")
 
 
