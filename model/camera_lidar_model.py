@@ -17,7 +17,7 @@ class CameraLidarBehavioralCloning(nn.Module):
         self.history_scans = history_scans
 
         self.image_encoder = nn.Sequential(
-            nn.Conv2d(history_scans, 16, kernel_size=5, stride=2, padding=2),
+            nn.Conv2d(history_scans * 2, 16, kernel_size=5, stride=2, padding=2),
             nn.BatchNorm2d(16),
             nn.ReLU(inplace=True),
             nn.MaxPool2d(kernel_size=2),
@@ -46,16 +46,19 @@ class CameraLidarBehavioralCloning(nn.Module):
         )
 
     def forward(self, images: torch.Tensor, scans: torch.Tensor) -> torch.Tensor:
-        if images.ndim != 4:
-            raise ValueError("images doit avoir la forme [batch, history, hauteur, largeur].")
-        if images.shape[1] != self.history_scans:
+        if images.ndim != 5:
+            raise ValueError("images doit avoir la forme [batch, history, 2, hauteur, largeur].")
+        if images.shape[1] != self.history_scans or images.shape[2] != 2:
             raise ValueError(
-                f"Historique image incompatible : {images.shape[1]} reçu, {self.history_scans} attendu."
+                "Historique image incompatible : "
+                f"{images.shape[1]} instants × {images.shape[2]} vues reçu, "
+                f"{self.history_scans} × 2 attendu."
             )
         if scans.ndim != 2 or scans.shape[1] != self.ray_count * self.history_scans:
             raise ValueError(
                 f"scans doit avoir la forme [batch, {self.ray_count * self.history_scans}]."
             )
-        image_features = self.image_encoder(images)
+        batch_size, history, cameras, height, width = images.shape
+        image_features = self.image_encoder(images.reshape(batch_size, history * cameras, height, width))
         lidar_features = self.lidar_encoder(scans)
         return self.steering_head(torch.cat((image_features, lidar_features), dim=1)).squeeze(1)

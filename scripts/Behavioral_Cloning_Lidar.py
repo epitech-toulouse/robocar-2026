@@ -3,7 +3,7 @@
 
 Le D500 (STL-19P) est lu sur l'UART de la Jetson Nano à 230400 bauds.
 Chaque tour complet devient une ligne CSV avec les 180 distances du champ
-avant (de -90° à +90°), en mètres, l'image stéréo prétraitée, la télémétrie
+avant (de -90° à +90°), en mètres, les images brutes gauche/droite, la télémétrie
 VESC et les commandes servo/duty de la voiture.
 
 Branchement UART Jetson Nano : TX LiDAR -> broche 10 (UART RX), GND commun.
@@ -50,7 +50,7 @@ except ImportError:
 try:
     import cv2
     import depthai as dai
-    from vision_preprocess import make_mask_stereo
+    from vision_preprocess import prepare_camera_image
 except ImportError as exc:
     print(f"[ERROR] Dépendance caméra absente ({exc}). Installe OpenCV/DepthAI et vérifie vision_preprocess.py.")
     sys.exit(1)
@@ -87,9 +87,10 @@ MOTOR_POLES = 10
 REDUCTION_RATIO = 1.0
 WHEEL_DIAMETER_M = 0.10
 PROJECT_DIR = Path(__file__).resolve().parents[1]
-DATASET_CSV = PROJECT_DIR / "dataset_lidar/driving_log_camera_lidar.csv"
+DATASET_CSV = PROJECT_DIR / "dataset_lidar/driving_log_stereo.csv"
 CSV_COLUMNS = [
-    "timestamp", "image_path", "servo", "duty", "erpm", "rpm_mechanical", "speed_kmh", "lidar"
+    "timestamp", "image_left_path", "image_right_path", "servo", "duty",
+    "erpm", "rpm_mechanical", "speed_kmh", "lidar"
 ]
 
 PACKET_HEADER = 0x54
@@ -489,7 +490,7 @@ def main() -> int:
                     # Les commandes restent stables pendant l'acquisition du scan.
                     scan = lidar.read_scan()
                     left_frame, right_frame = read_synchronized_camera_pair(q_left, q_right)
-                    image = make_mask_stereo(left_frame, right_frame)
+                    image = prepare_camera_image(left_frame)
 
                     # Le VESC est déjà ouvert par pyvesc : pas de second accès au port série.
                     try:
@@ -516,13 +517,18 @@ def main() -> int:
                         image_name = f"frame_{sample_time:%Y%m%d_%H%M%S_%f}.png"
                         image_dir = args.csv.parent / "images"
                         image_dir.mkdir(parents=True, exist_ok=True)
-                        image_file = image_dir / image_name
-                        if not cv2.imwrite(str(image_file), image):
-                            raise OSError(f"Impossible d'enregistrer l'image : {image_file}")
-                        image_path = (Path("images") / image_name).as_posix()
+                        left_image_name = f"left_{image_name}"
+                        right_image_name = f"right_{image_name}"
+                        left_image_file = image_dir / left_image_name
+                        right_image_file = image_dir / right_image_name
+                        if not cv2.imwrite(str(left_image_file), image):
+                            raise OSError(f"Impossible d'enregistrer l'image : {left_image_file}")
+                        if not cv2.imwrite(str(right_image_file), prepare_camera_image(right_frame)):
+                            raise OSError(f"Impossible d'enregistrer l'image : {right_image_file}")
                         csv_writer.writerow([
                             timestamp,
-                            image_path,
+                            (Path("images") / left_image_name).as_posix(),
+                            (Path("images") / right_image_name).as_posix(),
                             f"{servo:.4f}",
                             f"{duty:.4f}",
                             "" if erpm is None else f"{erpm:.1f}",

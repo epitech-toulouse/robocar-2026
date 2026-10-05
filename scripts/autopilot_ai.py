@@ -19,7 +19,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = SCRIPT_DIR.parent
 sys.path.insert(0, str(PROJECT_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
-from vision_preprocess import make_mask_stereo, resize_for_model
+from vision_preprocess import prepare_stereo_images, resize_stereo_for_model
 from Behavioral_Cloning_Lidar import D500Reader, LIDAR_PORT, LIDAR_MAX_RANGE_M
 from model.camera_lidar_model import CameraLidarBehavioralCloning
 
@@ -31,6 +31,7 @@ SERVO_CENTER = 0.5
 AUTO_DUTY = 0.045
 CAM_FPS = 30
 LIDAR_STALE_AFTER_S = 0.5
+CAMERA_SYNC_THRESHOLD_S = 0.020
 GAMEPAD_TYPE = None
 try:
     sys.path.insert(0, "/home/robotcar/Gamepad")
@@ -72,8 +73,10 @@ def load_model(device):
     ray_count = int(checkpoint.get("ray_count", 0))
     history_scans = int(checkpoint.get("history_scans", 0))
     history_images = int(checkpoint.get("history_images", 0))
+    camera_count = int(checkpoint.get("camera_count", 0))
     max_range = float(checkpoint.get("max_range", 0))
-    if ray_count != 180 or history_scans != 3 or history_images != 3 or max_range <= 0:
+    if (ray_count != 180 or history_scans != 3 or history_images != 3
+            or camera_count != 2 or max_range <= 0):
         raise ValueError("Métadonnées caméra/LiDAR absentes ou incompatibles dans le checkpoint.")
     model = CameraLidarBehavioralCloning(ray_count, history_scans).to(device)
     model.load_state_dict(checkpoint["model_state_dict"])
@@ -114,7 +117,7 @@ def main() -> int:
     except Exception as exc:
         print(f"[ERROR] Chargement du modèle : {exc}")
         return 1
-    print(f"[INFO] Modèle fusionné chargé : caméra stéréo + {ray_count} rayons LiDAR × {history_size}")
+    print(f"[INFO] Modèle fusionné chargé : 2 caméras + {ray_count} rayons LiDAR × {history_size}")
 
     gamepad = None
     if Gamepad is not None and Gamepad.available():
@@ -162,6 +165,11 @@ def main() -> int:
                                 emergency_stop(vesc)
                             time.sleep(0.005)
                             continue
+                        camera_delta = abs(
+                            (packet_left.getTimestampDevice() - packet_right.getTimestampDevice()).total_seconds()
+                        )
+                        if camera_delta > CAMERA_SYNC_THRESHOLD_S:
+                            continue
 
                         with lidar_lock:
                             raw_scan = lidar_state["scan"]
@@ -173,8 +181,12 @@ def main() -> int:
                                 print(f"\r[WARNING] Scan LiDAR indisponible : {lidar_error}   ", end="", flush=True)
                             continue
 
-                        mask = make_mask_stereo(packet_left.getCvFrame(), packet_right.getCvFrame())
-                        image_history.append(resize_for_model(mask).astype(np.float32) / 255.0)
+                        stereo_images = prepare_stereo_images(
+                            packet_left.getCvFrame(), packet_right.getCvFrame()
+                        )
+                        image_history.append(
+                            resize_stereo_for_model(stereo_images).astype(np.float32) / 255.0
+                        )
                         normalized_scan = np.nan_to_num(np.asarray(raw_scan, dtype=np.float32), nan=max_range, posinf=max_range, neginf=0.0)
                         if normalized_scan.size != ray_count:
                             emergency_stop(vesc)

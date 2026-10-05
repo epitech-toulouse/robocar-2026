@@ -24,7 +24,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from camera_lidar_model import CameraLidarBehavioralCloning
 from vision_preprocess import resize_for_model
 
-DEFAULT_CSV = PROJECT_DIR / "dataset_lidar" / "driving_log_camera_lidar.csv"
+DEFAULT_CSV = PROJECT_DIR / "dataset_lidar" / "driving_log_stereo.csv"
 HISTORY = 3
 
 try:
@@ -104,17 +104,29 @@ def load_csv_dataset(csv_path: Path, requested_scan_column: str | None):
     with csv_path.open("r", newline="", encoding="utf-8-sig") as handle:
         reader = csv.DictReader(handle)
         headers = reader.fieldnames or []
-        missing = {"image_path", "servo", "duty"} - set(headers)
+        missing = {"servo", "duty"} - set(headers)
         if missing:
             raise ValueError(f"Colonnes manquantes dans le CSV caméra + LiDAR : {sorted(missing)}")
+        if {"image_left_path", "image_right_path"}.issubset(headers):
+            left_column, right_column = "image_left_path", "image_right_path"
+        elif "image_path" in headers:
+            # Compatibilité lecture des anciens CSV monocaméra.
+            left_column = right_column = "image_path"
+        else:
+            raise ValueError(
+                "Le CSV doit contenir image_left_path et image_right_path "
+                "(ou image_path pour un ancien dataset monocaméra)."
+            )
         scan_column, scan_columns = find_scan_columns(headers, requested_scan_column)
         for row_number, row in enumerate(reader, start=2):
             try:
                 servo, duty = float(row.get("servo", "")), float(row.get("duty", ""))
             except (TypeError, ValueError):
                 continue
-            image_path = (row.get("image_path") or "").strip()
-            if not math.isfinite(servo) or not math.isfinite(duty) or abs(duty) <= 0.01 or not 0 <= servo <= 1 or not image_path:
+            image_left = (row.get(left_column) or "").strip()
+            image_right = (row.get(right_column) or "").strip()
+            if (not math.isfinite(servo) or not math.isfinite(duty) or abs(duty) <= 0.01
+                    or not 0 <= servo <= 1 or not image_left or not image_right):
                 continue
             if scan_column is not None:
                 scan = parse_scan(row.get(scan_column, ""), row_number)
@@ -123,18 +135,21 @@ def load_csv_dataset(csv_path: Path, requested_scan_column: str | None):
                     scan = np.asarray([float(row.get(column, "nan")) for column in scan_columns], dtype=np.float32)
                 except (TypeError, ValueError) as exc:
                     raise ValueError(f"Scan LiDAR invalide ligne {row_number}: {exc}") from exc
-            image = Path(image_path)
-            if not image.is_absolute():
-                image = csv_path.parent / image
-            rows.append((image, scan, servo))
+            left_path, right_path = Path(image_left), Path(image_right)
+            if not left_path.is_absolute():
+                left_path = csv_path.parent / left_path
+            if not right_path.is_absolute():
+                right_path = csv_path.parent / right_path
+            rows.append((left_path, right_path, scan, servo))
     if len(rows) < 2:
-        raise ValueError("Il faut au moins deux lignes valides avec image, LiDAR, servo et duty actif.")
-    ray_count = rows[0][1].size
-    for index, (image, scan, _servo) in enumerate(rows, start=2):
+        raise ValueError("Il faut au moins deux lignes valides avec les deux images, LiDAR, servo et duty actif.")
+    ray_count = rows[0][2].size
+    for index, (image_left, image_right, scan, _servo) in enumerate(rows, start=2):
         if scan.size != ray_count:
             raise ValueError(f"Scan à l'échantillon {index} : {scan.size} rayons au lieu de {ray_count}.")
-        if cv2.imread(str(image), cv2.IMREAD_GRAYSCALE) is None:
-            raise ValueError(f"Image introuvable ou illisible : {image}")
+        for image in (image_left, image_right):
+            if cv2.imread(str(image), cv2.IMREAD_GRAYSCALE) is None:
+                raise ValueError(f"Image introuvable ou illisible : {image}")
     return rows, ray_count
 
 
@@ -152,16 +167,19 @@ class CameraLidarDataset(Dataset):
         if len(history) < HISTORY:
             history = [self.rows[0]] * (HISTORY - len(history)) + history
         images, scans = [], []
-        for image_path, scan, _servo in history:
-            image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
-            if image is None:
-                raise RuntimeError(f"Image devenue illisible pendant l'entraînement : {image_path}")
-            images.append(resize_for_model(image).astype(np.float32) / 255.0)
+        for image_left_path, image_right_path, scan, _servo in history:
+            camera_images = []
+            for image_path in (image_left_path, image_right_path):
+                image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
+                if image is None:
+                    raise RuntimeError(f"Image devenue illisible pendant l'entraînement : {image_path}")
+                camera_images.append(resize_for_model(image).astype(np.float32) / 255.0)
+            images.append(np.stack(camera_images))
             clean = np.nan_to_num(scan, nan=self.max_range, posinf=self.max_range, neginf=0.0)
             scans.append(np.clip(clean, 0.0, self.max_range) / self.max_range)
         image_tensor = torch.from_numpy(np.stack(images))
         scan_tensor = torch.from_numpy(np.stack(scans).astype(np.float32).reshape(-1))
-        target = torch.tensor(self.rows[idx][2], dtype=torch.float32)
+        target = torch.tensor(self.rows[idx][3], dtype=torch.float32)
         return image_tensor, scan_tensor, target
 
 
@@ -212,7 +230,7 @@ def main():
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.2, patience=5)
     best_val_loss, patience, patience_counter = math.inf, 15, 0
     train_losses, val_losses = [], []
-    print(f"[DATA] {len(rows)} échantillons | {len(train_ds)} train | {len(val_ds)} validation | {ray_count} rayons/scan | {HISTORY} images + scans")
+    print(f"[DATA] {len(rows)} échantillons | {len(train_ds)} train | {len(val_ds)} validation | {ray_count} rayons/scan | {HISTORY} paires caméra + scans")
     print("\n--- DÉBUT ENTRAÎNEMENT ---")
     for epoch in range(args.epochs):
         model.train()
@@ -246,6 +264,7 @@ def main():
                 "ray_count": ray_count,
                 "history_scans": HISTORY,
                 "history_images": HISTORY,
+                "camera_count": 2,
                 "max_range": args.max_range,
             }, args.model_out)
             print(f"   ↳ Meilleur modèle sauvegardé : {args.model_out}")

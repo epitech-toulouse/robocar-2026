@@ -1,4 +1,4 @@
-"""Prétraitement partagé des images stéréo pour l'entraînement et l'autopilot."""
+"""Préparation partagée des images caméra pour l'entraînement et l'autopilot."""
 
 from __future__ import annotations
 
@@ -22,29 +22,29 @@ def _gray_u8(frame: np.ndarray) -> np.ndarray:
     return image
 
 
-def make_mask_stereo(left_frame: np.ndarray, right_frame: np.ndarray) -> np.ndarray:
-    """Produit une image binaire des différences visibles entre les deux caméras.
+def prepare_camera_image(frame: np.ndarray) -> np.ndarray:
+    """Retourne l'image CAM_B telle quelle, sans masque ni dessin superposé."""
+    return _gray_u8(frame).copy()
 
-    Les flux CAM_B et CAM_C de l'OAK-D Lite sont monochromes et calibrés en usine.
-    Le masque par différence met en évidence les contours et objets avec parallaxe,
-    tout en conservant le format monochrome utilisé par le modèle.
-    """
-    left = _gray_u8(left_frame)
-    right = _gray_u8(right_frame)
+
+def prepare_stereo_images(left_frame: np.ndarray, right_frame: np.ndarray) -> np.ndarray:
+    """Retourne les deux vues brutes empilées dans l'ordre gauche, droite."""
+    left = prepare_camera_image(left_frame)
+    right = prepare_camera_image(right_frame)
     if left.shape != right.shape:
-        raise ValueError(f"Les deux images stéréo doivent avoir la même taille : {left.shape} / {right.shape}.")
-
-    difference = cv2.absdiff(left, right)
-    blurred = cv2.GaussianBlur(difference, (5, 5), 0)
-    _threshold, mask = cv2.threshold(
-        blurred, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU
-    )
-    kernel = np.ones((3, 3), dtype=np.uint8)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-    return cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+        raise ValueError(f"Les deux vues doivent avoir la même taille : {left.shape} / {right.shape}.")
+    return np.stack((left, right), axis=0)
 
 
 def resize_for_model(image: np.ndarray) -> np.ndarray:
     """Normalise une image de dataset ou de caméra au format réseau 120×160."""
     gray = _gray_u8(image)
     return cv2.resize(gray, MODEL_IMAGE_SIZE, interpolation=cv2.INTER_AREA)
+
+
+def resize_stereo_for_model(images: np.ndarray) -> np.ndarray:
+    """Redimensionne les deux vues en gardant l'axe caméra gauche/droite."""
+    stereo = np.asarray(images)
+    if stereo.ndim != 3 or stereo.shape[0] != 2:
+        raise ValueError("Les images stéréo doivent avoir la forme [2, hauteur, largeur].")
+    return np.stack((resize_for_model(stereo[0]), resize_for_model(stereo[1])), axis=0)
