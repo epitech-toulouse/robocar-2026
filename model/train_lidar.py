@@ -50,8 +50,8 @@ def parse_args():
 
 
 def select_device(preference: str) -> torch.device:
-    if preference == "cpu":
-        return torch.device("cpu")
+    if preference == "gpu":
+        return torch.device("gpu")
     if not torch.cuda.is_available():
         if preference == "cuda":
             raise RuntimeError("CUDA demandé, mais PyTorch ne détecte aucun GPU CUDA disponible.")
