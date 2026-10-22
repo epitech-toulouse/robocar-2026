@@ -18,7 +18,7 @@ Source : https://github.com/f1tenth/f1tenth_system, branche `jazzy-devel`, commi
 
 | Fichier F1TENTH | Notre fichier | Ce qui change |
 |---|---|---|
-| `config/vesc.yaml` | `robocar_bringup/config/vesc.yaml` | Valeurs du §7 (servo, vitesse, empattement), `port: /dev/vesc`, `cmd_timeout: 0.1` (watchdog), `throttle_interpolator` retiré |
+| `config/vesc.yaml` | `robocar_bringup/config/vesc.yaml` | Valeurs du §7 (servo, vitesse, empattement), `port: /dev/vesc`, `cmd_timeout: 0.1` (watchdog), duty ±0,10, `duty_cycle_only: true`, `throttle_interpolator` retiré |
 | `config/mux.yaml` | `robocar_bringup/config/mux.yaml` | Lock `drive_enable` ajouté (priorité 100, 0,1 s) |
 | `config/joy_teleop.yaml` | `robocar_bringup/config/joy_teleop.yaml` | Numéros de boutons et d'axes mesurés sur la F710 (LB 4, RB 5, axes 1 et 3), vitesse max 1 m/s au lieu de 5, `autorepeat_rate` 50 Hz, profil `drive_enable` sur RB au lieu de `autonomous_control` |
 | `config/f1tenth_online_async.yaml` | `pc/slam/f1tenth_online_async.yaml` | `base_frame: base_link` au lieu de `laser` |
@@ -28,11 +28,19 @@ Source : https://github.com/f1tenth/f1tenth_system, branche `jazzy-devel`, commi
 
 Chaque modification dans le code est marquée `[robocar]`.
 
-### `vesc/vesc_ackermann` : watchdog dans `ackermann_to_vesc`
+### `vesc/vesc_ackermann` : duty cycle et watchdog dans `ackermann_to_vesc`
 - Fichiers : `src/ackermann_to_vesc.cpp`, `include/vesc_ackermann/ackermann_to_vesc.hpp`.
-- Nouveau paramètre `cmd_timeout` (en s, 0 = désactivé, valeur d'origine). S'il ne reçoit rien sur `ackermann_cmd` pendant `cmd_timeout`, le nœud publie `commands/motor/speed = 0` à 50 Hz jusqu'à la commande suivante. Le servo n'est pas touché.
+- Depuis le 2026-10-21 : publication sur `commands/motor/duty_cycle`, sans publication RPM. `speed_to_duty_gain: 0.10`, `max_duty_cycle: 0.10` : `speed = 0.45` donne duty `0.045`, plafonné à ±0,10. Aucun offset moteur : zéro reste zéro. L'entrée Ackermann reste nominalement en m/s, sans asservissement de vitesse réelle.
+- `cmd_timeout` (en s, strictement positif, défaut 0,1) : sans `ackermann_cmd`, duty zéro à 50 Hz jusqu'à la commande suivante. Le servo n'est pas touché.
+- Les valeurs non finies de vitesse/direction coupent immédiatement le duty. Paramètres de conversion invalides ou watchdog désactivé : démarrage refusé.
 - Mesure sur horloge monotone (`RCL_STEADY_TIME`), pour ne pas être affectée par un saut d'heure système (chrony).
 - Pourquoi : quand le mux se tait, `vesc_driver` ne renvoie pas la dernière commande, et le moteur garde sa consigne jusqu'au timeout du firmware VESC. Voir `docs/ROBOCAR_TO_DO_ROS2.md` §2, chaîne de sécurité.
+
+### `vesc/vesc_driver` : envoi USB et mode duty exclusif
+- `src/vesc_interface.cpp`, `include/vesc_driver/packet_writer.hpp` : remplacement de `async_send` (tampon temporaire détruit trop tôt) par des écritures synchrones complètes, protégées par mutex ; reprise des écritures partielles, propagation des erreurs USB. Aucun heartbeat ajouté : le timeout matériel reste effectif si le pilote tombe.
+- Contrôle de flux désactivé (USB, comme pyserial) ; drapeau du thread de réception atomique et tampon de réception propre à chaque instance.
+- `src/vesc_driver.cpp` : `duty_cycle_only: true` désactive les abonnements moteur RPM, courant, frein et position, pour éviter les changements concurrents de mode. Les commandes duty non finies deviennent zéro. Les limites servo restent inchangées.
+- Tests natifs : `python3 tests/run_native_tests.py`, avec AddressSanitizer/UndefinedBehaviorSanitizer. Tests ROS de la chaîne complète : `tests/test_safety_chain.py` (16 cas avec `--kill-mux`), sans matériel.
 
 ### `ldlidar_stl_ros2` : include manquant
 - Fichier : `ldlidar_driver/include/logger/log_module.h`, ligne 40.

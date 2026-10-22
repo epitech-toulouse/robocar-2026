@@ -1,5 +1,7 @@
 # Robocar : base ROS 2 (TODO)
 
+> **Mise à jour 2026-10-21 :** commande moteur désormais en **duty cycle ±0,10**, watchdog à duty zéro ; les résultats historiques en eRPM ci-dessous décrivent l'ancien mode. Voir [DUTY_CYCLE.md](DUTY_CYCLE.md). `speed_to_erpm_gain` reste réservé à l'odométrie ; la vitesse demandée n'est plus asservie.
+
 **Objectif.** Construire des briques de base ROS 2 modulaires et propres : contrôle, LiDAR, caméras, GPS et accès au GPU. Elles restent alignées sur F1TENTH, pour que les étudiants n'aient qu'à écrire leurs nœuds.
 
 Rien n'est repris des anciens projets, à part ce qu'ils ont appris sur le matériel (`ROBOCAR_DESIGN.md`). Tout est développé dans **`Robocar_ROS2/`**, qui est le dépôt git (`git@github.com:JasonChmn/Robocar_ROS2.git`, branche `master`). Les anciens dossiers restent en archive, sans modification, hors du dépôt.
@@ -35,7 +37,7 @@ flowchart LR
     JOY[joy_node] -->|/joy| JT[joy_teleop]
     JT -->|"/teleop<br/>prio 100 · homme mort LB"| MUX[ackermann_mux]
     MUX -->|/ackermann_cmd| A2V[ackermann_to_vesc_node]
-    A2V -->|"/commands/motor/speed<br/>/commands/servo/position"| VD[vesc_driver_node]
+    A2V -->|"/commands/motor/duty_cycle<br/>/commands/servo/position"| VD[vesc_driver_node]
     VD -->|/sensors/core| V2O[vesc_to_odom_node]
     V2O -->|"/odom + TF odom→base_link"| OUT(( ))
     RSP[robot_state_publisher<br/>URDF] -->|/tf_static| OUT
@@ -217,11 +219,12 @@ Avec ROS 2, un nœud tourne indifféremment sur la Jetson ou sur le PC. C'est un
 
 | Paramètre | Départ | Méthode |
 |---|---|---|
-| `speed_to_erpm_gain` | 4614 (valeur F1TENTH, Traxxas + Velineon). Notre voiture est différente : Fiesta **BL-2s**, 4 pôles, pignon 13 / couronne 36, roues de ~83 mm (`host/vesc/README.md`). **À calibrer** | Formule : `pôles/2 × rapport de réduction × 60 / (π × Ø roue)`. Vérification : commander 1 m/s sur 5 m mesurés, puis gain × v_cmd / v_mesurée |
+| `speed_to_erpm_gain` (odométrie uniquement) | 4614 (valeur F1TENTH, Traxxas + Velineon). Notre voiture est différente : Fiesta **BL-2s**, 4 pôles, pignon 13 / couronne 36, roues de ~83 mm (`host/vesc/README.md`). **À calibrer** | Formule : `pôles/2 × rapport de réduction × 60 / (π × Ø roue)`. Vérification : commander 1 m/s sur 5 m mesurés, puis gain × v_cmd / v_mesurée |
 | `steering_angle_to_servo_offset` | 0,50 | Ajuster jusqu'à ce que la voiture roule droit avec un angle de 0 |
 | `steering_angle_to_servo_gain` | **−0,88** (≈ 0,3 / 0,34 rad) | Signe vérifié le 2026-09-25 : un angle positif tourne **à gauche** (REP-103) |
 | `servo_min` / `servo_max` | 0,20 / 0,80 | Vérifié le 2026-09-25 : le servo ne force pas en butée |
-| `speed_min` / `speed_max` (ERPM) | ±5000 (~1 m/s) | Augmenter progressivement. Plus vite, les collisions sont plus violentes et l'odométrie glisse davantage |
+| `speed_to_duty_gain` / `max_duty_cycle` | 0,10 / 0,10 | Conversion ouverte et plafond identique au Python manuel ; aucune vitesse réelle garantie |
+| `duty_cycle_min` / `duty_cycle_max` | −0,10 / +0,10 | Seconde limitation dans le pilote ; `duty_cycle_only: true` désactive les autres modes moteur |
 | `joy_teleop` `drive-speed` scale | 1,0 m/s | F1TENTH met 5, ce qui est trop pour débuter |
 | `joy_teleop` `drive-steering_angle` scale | 0,34 rad | Braquage maximal mesuré |
 | `wheelbase` (`vesc_to_odom`) | 0,26 m | À remesurer |

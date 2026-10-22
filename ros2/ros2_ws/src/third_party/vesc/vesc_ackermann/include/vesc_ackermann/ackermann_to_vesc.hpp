@@ -49,7 +49,8 @@ public:
 private:
   // ROS parameters
   // conversion gain and offset
-  double speed_to_erpm_gain_, speed_to_erpm_offset_;
+  // [robocar] speed remains a nominal m/s input; the motor runs in bounded duty mode.
+  double speed_to_duty_gain_, max_duty_cycle_;
   double steering_to_servo_gain_, steering_to_servo_offset_;
 
   // [robocar] watchdog
@@ -59,11 +60,12 @@ private:
   bool timed_out_ = false;
   rclcpp::TimerBase::SharedPtr watchdog_timer_;
   void watchdogCallback();
+  void publishStop();
 
   /** @todo consider also providing an interpolated look-up table conversion */
 
   // ROS services
-  rclcpp::Publisher<Float64>::SharedPtr erpm_pub_;
+  rclcpp::Publisher<Float64>::SharedPtr duty_pub_;
   rclcpp::Publisher<Float64>::SharedPtr servo_pub_;
   rclcpp::Subscription<AckermannDriveStamped>::SharedPtr ackermann_sub_;
 

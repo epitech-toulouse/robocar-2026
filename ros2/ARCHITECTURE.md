@@ -5,6 +5,18 @@ Une brique = un service `docker compose`.\
 Démarrage : `README.md` (étudiants), `BOOTSTRAP.md` (préparer une voiture). Détails et TODO : `docs/ROBOCAR_TO_DO_ROS2.md`. Journal de mise en route : `A_FAIRE_SUR_LA_JETSON.md`.\
 État au 2026-09-25 : `control` (VESC, F710) et `lidar` validés sur la voiture, roues en l'air, sécurité comprise. `camera_3d_oak` n'est pas encore testé, et la calibration au sol reste à faire.
 
+## Commande moteur actuelle (2026-10-21)
+
+La commande est passée en duty cycle : `duty = clamp(0,10 × drive.speed, −0,10, +0,10)`.
+Le moteur n'utilise plus le PID de vitesse VESC. L'interface Ackermann reste en m/s
+nominaux, sans garantie de vitesse réelle. `speed_to_erpm_gain` ne sert plus qu'à
+l'odométrie calculée depuis les eRPM **mesurés**. Voir `docs/DUTY_CYCLE.md` pour
+reconstruire l'image et tester la migration.
+
+Les mesures de délais ci-dessous datent du mode RPM : les délais de coupure et la
+distance d'arrêt physique en duty restent à revalider sur la voiture. Duty zéro
+coupe la traction ; cela ne garantit pas une immobilisation immédiate.
+
 ## Briques
 
 | Service | Profil | Nœuds | Paquet |
@@ -30,7 +42,7 @@ flowchart LR
   JT -->|"/drive_enable · lock, RB"| MUX
   USER["nœud étudiant"] -->|"/drive · prio 10"| MUX
   MUX -->|/ackermann_cmd| A2V[ackermann_to_vesc<br/>+ watchdog 0,1 s]
-  A2V -->|"/commands/motor/speed<br/>/commands/servo/position"| VD[vesc_driver]
+  A2V -->|"/commands/motor/duty_cycle<br/>/commands/servo/position"| VD[vesc_driver]
   VD <-->|/dev/vesc| VESC[(VESC)]
   VD -->|/sensors/core| V2O[vesc_to_odom]
   V2O -->|"/odom · TF odom→base_link"| OUT(( ))
@@ -49,7 +61,7 @@ flowchart LR
   B -->|LB| T["/teleop = sticks (prio 100)"]
   B -->|RB| U["lock ouvert : /drive passe"]
   B -->|"autre bouton, ou /joy muet > 0,1 s"| L["lock fermé : /drive masqué"]
-  L --> M["mux muet"] -->|0,1 s| W["watchdog : vitesse 0"]
+  L --> M["mux muet"] -->|0,1 s| W["watchdog : duty 0"]
 ```
 
 | Panne | Arrêt mesuré (PC) | Arrêt mesuré (Jetson) | Voiture, roues en l'air |
@@ -69,6 +81,7 @@ flowchart LR
 | `/teleop` | `ackermann_msgs/AckermannDriveStamped` | `joy_teleop` (LB) |
 | `/drive_enable` | `std_msgs/Bool` | `joy_teleop` (RB) |
 | `/ackermann_cmd` | `ackermann_msgs/AckermannDriveStamped` | `ackermann_mux` |
+| `/commands/motor/duty_cycle` | `std_msgs/Float64` | `ackermann_to_vesc_node` (±0,10 ; watchdog = 0) |
 | `/odom` | `nav_msgs/Odometry` | `vesc_to_odom_node` |
 | `/sensors/core` | `vesc_msgs/VescStateStamped` | `vesc_driver_node` |
 | `/scan` | `sensor_msgs/LaserScan` | `ldlidar` |

@@ -126,11 +126,11 @@ Un périphérique débranché puis rebranché n'est plus vu par son conteneur : 
 | **RB maintenu** | **Votre nœud conduit** : `/drive` passe |
 | RB + LB | La manette reprend la main sur votre nœud |
 
-**RB est un bouton d'homme mort** : tant qu'il n'est pas maintenu, rien de ce que publie votre nœud n'atteint le moteur. La voiture s'arrête en moins de 0,2 s dans chacun de ces cas :
+**RB est un bouton d'homme mort** : tant qu'il n'est pas maintenu, rien de ce que publie votre nœud n'atteint le moteur. La chaîne demande un duty zéro en environ 0,2 s au pire dans ces cas (le délai physique d'arrêt reste à revalider en duty) :
 - RB relâché ;
 - manette perdue ;
 - votre nœud planté ;
-- plus de `/drive` pendant X s.
+- plus de `/drive` pendant 0,1 s.
 
 Détail : `ARCHITECTURE.md`, « Chaîne de sécurité ».
 
@@ -138,7 +138,7 @@ Détail : `ARCHITECTURE.md`, « Chaîne de sécurité ».
 - Les **premiers essais d'un nouveau code se font roues en l'air** (la voiture posée sur une cale).
 - Au sol, une personne tient **toujours** la manette, le pouce sur RB.
 - Surveillez la batterie (`voltage_input` dans `/sensors/core`) : **arrêt sous 14,0 V**.
-- La vitesse est limitée à ±5000 ERPM (`config/vesc.yaml`), soit environ 1 m/s. C'est approximatif tant que `speed_to_erpm_gain` n'est pas calibré. N'augmentez la limite que progressivement.
+- Le moteur est piloté en **duty cycle**, limité à **±0,10** comme le script Python manuel. La consigne `drive.speed` reste nominalement en m/s, mais la vitesse réelle n’est plus asservie. `0,5` donne un duty de `0,05`. Voir [la migration et les tests](docs/DUTY_CYCLE.md).
 
 ## 5. Écrire son nœud
 
@@ -146,10 +146,10 @@ Votre nœud publie des `ackermann_msgs/msg/AckermannDriveStamped` sur **`/drive`
 
 | Champ | Unité | Limites |
 |---|---|---|
-| `drive.speed` | m/s, + = avant | ~±1 m/s (limité par `vesc.yaml`). Échelle pas encore calibrée : la vitesse réelle peut différer |
+| `drive.speed` | m/s nominaux, + = avant | `duty = clamp(0,10 × speed, −0,10, +0,10)` ; vitesse réelle non garantie |
 | `drive.steering_angle` | rad, **+ = gauche** (REP-103) | ±0,34 rad |
 
-Exemple minimal, qui avance tout droit à 0,5 m/s :
+Exemple minimal, qui avance tout droit avec une consigne nominale de 0,5 (duty 0,05) :
 
 ```python
 import rclpy

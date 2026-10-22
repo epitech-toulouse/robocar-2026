@@ -31,6 +31,7 @@
 #include "vesc_driver/vesc_interface.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <iomanip>
 #include <iostream>
@@ -42,6 +43,7 @@
 #include <vector>
 
 #include "vesc_driver/vesc_packet_factory.hpp"
+#include "vesc_driver/packet_writer.hpp"
 #include "serial_driver/serial_driver.hpp"
 
 namespace vesc_driver
@@ -58,7 +60,9 @@ public:
   void on_configure();
   void connect(const std::string & port);
 
-  bool packet_thread_run_;
+  // [robocar] Shared by the receive thread and disconnect().
+  std::atomic<bool> packet_thread_run_{false};
+  PacketWriter packet_writer_;
   std::unique_ptr<std::thread> packet_thread_;
   PacketHandlerFunction packet_handler_;
   ErrorHandlerFunction error_handler_;
@@ -80,7 +84,7 @@ private:
 
 void VescInterface::Impl::packet_creation_thread()
 {
-  static auto temp_buffer = Buffer(2048, 0);
+  auto temp_buffer = Buffer(2048, 0);
   while (packet_thread_run_) {
     const auto bytes_read = serial_driver_->port()->receive(temp_buffer);
     buffer_.reserve(buffer_.size() + temp_buffer.size());
@@ -147,7 +151,8 @@ void VescInterface::Impl::packet_creation_thread()
 void VescInterface::Impl::connect(const std::string & port)
 {
   uint32_t baud_rate = 115200;
-  auto fc = drivers::serial_driver::FlowControl::HARDWARE;
+  // [robocar] USB VESC, same framing as pyserial (no RTS/CTS).
+  auto fc = drivers::serial_driver::FlowControl::NONE;
   auto pt = drivers::serial_driver::Parity::NONE;
   auto sb = drivers::serial_driver::StopBits::ONE;
   device_config_ =
@@ -238,7 +243,15 @@ bool VescInterface::isConnected() const
 
 void VescInterface::send(const VescPacket & packet)
 {
-  impl_->serial_driver_->port()->async_send(packet.frame());
+  // [robocar] async_send borrowed a temporary packet's memory and could overlap writes.
+  // Complete every frame synchronously, including partial writes, before releasing it.
+  try {
+    impl_->packet_writer_.send(packet.frame(), [this](const Buffer & bytes) {
+      return impl_->serial_driver_->port()->send(bytes);
+    });
+  } catch (const std::exception & e) {
+    throw SerialException(e.what());
+  }
 }
 
 void VescInterface::requestFWVersion()

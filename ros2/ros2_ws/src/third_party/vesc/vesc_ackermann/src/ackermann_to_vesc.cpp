@@ -29,6 +29,7 @@
 // -*- mode:c++; fill-column: 100; -*-
 
 #include "vesc_ackermann/ackermann_to_vesc.hpp"
+#include "vesc_ackermann/duty_cycle_command.hpp"
 
 #include <ackermann_msgs/msg/ackermann_drive_stamped.hpp>
 #include <std_msgs/msg/float64.hpp>
@@ -49,22 +50,29 @@ AckermannToVesc::AckermannToVesc(const rclcpp::NodeOptions & options)
 : Node("ackermann_to_vesc_node", options)
 {
   // declare parameters
-  declare_parameter("speed_to_erpm_gain", 0.0);
-  declare_parameter("speed_to_erpm_offset", 0.0);
+  // [robocar] Match the Python manual collector: maximum absolute duty 0.10.
+  declare_parameter("speed_to_duty_gain", 0.1);
+  declare_parameter("max_duty_cycle", 0.1);
   declare_parameter("steering_angle_to_servo_gain", 0.0);
   declare_parameter("steering_angle_to_servo_offset", 0.0);
-  // [robocar] watchdog: publish zero speed if no command for cmd_timeout seconds (0 = disabled)
-  declare_parameter("cmd_timeout", 0.0);
+  // [robocar] The command watchdog is mandatory in duty mode.
+  declare_parameter("cmd_timeout", 0.1);
 
   // get conversion parameters
-  speed_to_erpm_gain_ = get_parameter("speed_to_erpm_gain").get_value<double>();
-  speed_to_erpm_offset_ = get_parameter("speed_to_erpm_offset").get_value<double>();
+  speed_to_duty_gain_ = get_parameter("speed_to_duty_gain").get_value<double>();
+  max_duty_cycle_ = get_parameter("max_duty_cycle").get_value<double>();
   steering_to_servo_gain_ = get_parameter("steering_angle_to_servo_gain").get_value<double>();
   steering_to_servo_offset_ = get_parameter("steering_angle_to_servo_offset").get_value<double>();
   cmd_timeout_ = get_parameter("cmd_timeout").get_value<double>();
+  boundedDutyCycle(0.0, speed_to_duty_gain_, max_duty_cycle_);  // validate parameters
+  if (!std::isfinite(cmd_timeout_) || cmd_timeout_ <= 0.0 ||
+    !std::isfinite(steering_to_servo_gain_) || !std::isfinite(steering_to_servo_offset_))
+  {
+    throw std::invalid_argument("Finite steering parameters and a positive cmd_timeout are required");
+  }
 
-  // create publishers to vesc electric-RPM (speed) and servo commands
-  erpm_pub_ = create_publisher<Float64>("commands/motor/speed", 10);
+  // [robocar] No RPM commands: the VESC speed PID is bypassed.
+  duty_pub_ = create_publisher<Float64>("commands/motor/duty_cycle", 10);
   servo_pub_ = create_publisher<Float64>("commands/servo/position", 10);
 
   // subscribe to ackermann topic
@@ -72,11 +80,9 @@ AckermannToVesc::AckermannToVesc(const rclcpp::NodeOptions & options)
     "ackermann_cmd", 10, std::bind(&AckermannToVesc::ackermannCmdCallback, this, _1));
 
   // [robocar] watchdog, on a steady clock so that system time jumps (chrony) do not affect it
-  if (cmd_timeout_ > 0.0) {
-    last_cmd_time_ = steady_clock_.now();
-    watchdog_timer_ = create_wall_timer(
-      std::chrono::milliseconds(20), std::bind(&AckermannToVesc::watchdogCallback, this));
-  }
+  last_cmd_time_ = steady_clock_.now();
+  watchdog_timer_ = create_wall_timer(
+    std::chrono::milliseconds(20), std::bind(&AckermannToVesc::watchdogCallback, this));
 }
 
 void AckermannToVesc::watchdogCallback()
@@ -85,12 +91,17 @@ void AckermannToVesc::watchdogCallback()
     return;
   }
   if (!timed_out_) {
-    RCLCPP_WARN(get_logger(), "No ackermann_cmd for %.2f s, sending zero speed", cmd_timeout_);
+    RCLCPP_WARN(get_logger(), "No ackermann_cmd for %.2f s, sending zero duty", cmd_timeout_);
     timed_out_ = true;
   }
-  Float64 erpm_msg;
-  erpm_msg.data = 0.0;
-  erpm_pub_->publish(erpm_msg);
+  publishStop();
+}
+
+void AckermannToVesc::publishStop()
+{
+  Float64 duty_msg;
+  duty_msg.data = 0.0;
+  duty_pub_->publish(duty_msg);
 }
 
 void AckermannToVesc::ackermannCmdCallback(const AckermannDriveStamped::SharedPtr cmd)
@@ -101,17 +112,27 @@ void AckermannToVesc::ackermannCmdCallback(const AckermannDriveStamped::SharedPt
     timed_out_ = false;
   }
 
-  // calc vesc electric RPM (speed)
-  Float64 erpm_msg;
-  erpm_msg.data = speed_to_erpm_gain_ * cmd->drive.speed + speed_to_erpm_offset_;
+  // [robocar] Invalid sensor/model output must never become a motor command.
+  if (!std::isfinite(cmd->drive.speed) || !std::isfinite(cmd->drive.steering_angle)) {
+    RCLCPP_ERROR(get_logger(), "Non-finite Ackermann command, sending zero duty");
+    publishStop();
+    return;
+  }
+  Float64 duty_msg;
+  duty_msg.data = boundedDutyCycle(cmd->drive.speed, speed_to_duty_gain_, max_duty_cycle_);
 
   // calc steering angle (servo)
   Float64 servo_msg;
   servo_msg.data = steering_to_servo_gain_ * cmd->drive.steering_angle + steering_to_servo_offset_;
+  if (!std::isfinite(servo_msg.data)) {
+    publishStop();
+    return;
+  }
+  servo_msg.data = std::max(0.0, std::min(1.0, servo_msg.data));
 
   // publish
   if (rclcpp::ok()) {
-    erpm_pub_->publish(erpm_msg);
+    duty_pub_->publish(duty_msg);
     servo_pub_->publish(servo_msg);
   }
 }

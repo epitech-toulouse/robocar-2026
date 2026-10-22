@@ -45,6 +45,12 @@ ament_auto_add_executable(
 #############
 
 if(BUILD_TESTING)
+  # [robocar] Exercise real packets with a short-writing, contended serial transport.
+  add_executable(test_packet_writer
+    test/test_packet_writer.cpp src/vesc_packet.cpp src/vesc_packet_factory.cpp)
+  target_include_directories(test_packet_writer PRIVATE include)
+  target_link_libraries(test_packet_writer ${CMAKE_THREAD_LIBS_INIT})
+  add_test(NAME packet_writer COMMAND test_packet_writer)
   find_package(ament_lint_auto REQUIRED)
   ament_lint_auto_find_test_dependencies()
 endif()

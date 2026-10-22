@@ -38,6 +38,10 @@ rclcpp_components_register_node(${PROJECT_NAME}
 #############
 
 if(BUILD_TESTING)
+  # [robocar] These regressions also run without ROS via tests/run_native_tests.py.
+  add_executable(test_duty_cycle test/test_duty_cycle.cpp)
+  target_include_directories(test_duty_cycle PRIVATE include)
+  add_test(NAME duty_cycle COMMAND test_duty_cycle)
   find_package(ament_lint_auto REQUIRED)
   ament_lint_auto_find_test_dependencies()
 endif()
