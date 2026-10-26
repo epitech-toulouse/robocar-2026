@@ -9,6 +9,8 @@ ldlidar:
     port_baudrate: 230400
     # sens antihoraire (REP-103)
     laser_scan_dir: true
+    # Nombre constant de cases angulaires pour garder une géométrie stable pour SLAM.
+    scan_beam_count: 503
     # masque le châssis s'il apparaît dans le scan (degrés, [min, max] mis à 0)
     enable_angle_crop_func: false
     angle_crop_min: 135.0

@@ -41,6 +41,7 @@ int main(int argc, char **argv) {
   setting.enable_angle_crop_func = false;
   setting.angle_crop_min = 0.0;
   setting.angle_crop_max = 0.0;
+  setting.scan_beam_count = 503;
   
   // declare ros2 param
   node->declare_parameter<std::string>("product_name", product_name);
@@ -52,6 +53,7 @@ int main(int argc, char **argv) {
   node->declare_parameter<bool>("enable_angle_crop_func", setting.enable_angle_crop_func);
   node->declare_parameter<double>("angle_crop_min", setting.angle_crop_min);
   node->declare_parameter<double>("angle_crop_max", setting.angle_crop_max);
+  node->declare_parameter<int>("scan_beam_count", setting.scan_beam_count);
 
   // get ros2 param
   node->get_parameter("product_name", product_name);
@@ -63,6 +65,12 @@ int main(int argc, char **argv) {
   node->get_parameter("enable_angle_crop_func", setting.enable_angle_crop_func);
   node->get_parameter("angle_crop_min", setting.angle_crop_min);
   node->get_parameter("angle_crop_max", setting.angle_crop_max);
+  node->get_parameter("scan_beam_count", setting.scan_beam_count);
+
+  if (setting.scan_beam_count < 2) {
+    RCLCPP_ERROR(node->get_logger(), "<scan_beam_count> must be at least 2.");
+    return EXIT_FAILURE;
+  }
 
   ldlidar::LDLidarDriver* ldlidarnode = new ldlidar::LDLidarDriver();
 
@@ -76,6 +84,7 @@ int main(int argc, char **argv) {
   RCLCPP_INFO(node->get_logger(), "<enable_angle_crop_func>: %s", (setting.enable_angle_crop_func?"true":"false"));
   RCLCPP_INFO(node->get_logger(), "<angle_crop_min>: %f", setting.angle_crop_min);
   RCLCPP_INFO(node->get_logger(), "<angle_crop_max>: %f", setting.angle_crop_max);
+  RCLCPP_INFO(node->get_logger(), "<scan_beam_count>: %d", setting.scan_beam_count);
 
   if (product_name == "LDLiDAR_LD06") {
     type_name = ldlidar::LDType::LD_06;
@@ -155,7 +164,10 @@ void  ToLaserscanMessagePublish(ldlidar::Points2D& src,  double lidar_spin_freq,
   angle_max = (2 * M_PI);
   range_min = 0.02;
   range_max = 25;
-  int beam_size = static_cast<int>(src.size());
+  // Keep the LaserScan geometry constant. The LD19 packet may contain a
+  // slightly different number of points on each revolution, but SLAM expects
+  // the same ranges length and angular increment for every scan.
+  const int beam_size = setting.scan_beam_count;
   angle_increment = (angle_max - angle_min) / (float)(beam_size -1);
   // Calculate the number of scanning points
   if (lidar_spin_freq > 0) {
@@ -198,12 +210,7 @@ void  ToLaserscanMessagePublish(ldlidar::Points2D& src,  double lidar_spin_freq,
 
       float angle = ANGLE_TO_RADIAN(dir_angle); // Lidar angle unit form degree transform to radian
       int index = static_cast<int>(ceil((angle - angle_min) / angle_increment));
-      if (index < beam_size) {
-        if (index < 0) {
-          RCLCPP_ERROR(node->get_logger(), "error index: %d, beam_size: %d, angle: %f, output.angle_min: %f, output.angle_increment: %f", 
-            index, beam_size, angle, angle_min, angle_increment);
-        }
-
+      if (index >= 0 && index < beam_size) {
         if (setting.laser_scan_dir) {
           int index_anticlockwise = beam_size - index - 1;
           // If the current content is Nan, it is assigned directly
