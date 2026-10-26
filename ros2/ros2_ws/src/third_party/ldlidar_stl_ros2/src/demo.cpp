@@ -147,19 +147,9 @@ int main(int argc, char **argv) {
 void  ToLaserscanMessagePublish(ldlidar::Points2D& src,  double lidar_spin_freq, LaserScanSetting& setting,
   rclcpp::Node::SharedPtr& node, rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr& lidarpub) {
   float angle_min, angle_max, range_min, range_max, angle_increment;
-  double scan_time;
   rclcpp::Time start_scan_time;
-  static rclcpp::Time end_scan_time;
-  static bool first_scan = true;
 
   start_scan_time = node->now();
-  scan_time = (start_scan_time.seconds() - end_scan_time.seconds());
-
-  if (first_scan) {
-    first_scan = false;
-    end_scan_time = start_scan_time;
-    return;
-  }
   // Adjust the parameters according to the demand
   angle_min = 0;
   angle_max = (2 * M_PI);
@@ -169,6 +159,9 @@ void  ToLaserscanMessagePublish(ldlidar::Points2D& src,  double lidar_spin_freq,
   angle_increment = (angle_max - angle_min) / (float)(beam_size -1);
   // Calculate the number of scanning points
   if (lidar_spin_freq > 0) {
+    // Describe one lidar revolution, not the time since this callback last ran.
+    // Callback delays otherwise inflate time_increment and make RViz queue scans.
+    const double scan_time = 1.0 / lidar_spin_freq;
     sensor_msgs::msg::LaserScan output;
     output.header.stamp = start_scan_time;
     output.header.frame_id = setting.frame_id;
@@ -238,7 +231,6 @@ void  ToLaserscanMessagePublish(ldlidar::Points2D& src,  double lidar_spin_freq,
       }
     }
     lidarpub->publish(output);
-    end_scan_time = start_scan_time;
   } 
 }
 
