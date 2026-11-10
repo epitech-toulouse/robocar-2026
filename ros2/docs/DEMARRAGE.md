@@ -124,4 +124,3 @@ Sur la Jetson :
 ```bash
 docker compose -f docker/compose.yaml --profile control --profile lidar down
 ```
-
