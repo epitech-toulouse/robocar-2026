@@ -20,11 +20,11 @@
       i_isp_den: 4
       i_width: 480
       i_height: 270
-      i_fps: 15.0
+      i_fps: 1.0
       r_focus: 1
     left:
       i_resolution: 480P
-      i_fps: 15.0
+      i_fps: 1.0
     right:
       i_resolution: 480P
-      i_fps: 15.0
+      i_fps: 1.0
