@@ -37,6 +37,8 @@ services:
     privileged: true
     volumes:
       - /dev/bus/usb:/dev/bus/usb
+      # Charger le YAML depuis l'hôte pour régler la caméra sans reconstruire l'image.
+      - ../ros2_ws/src/robocar_bringup/config/camera_3d_oak.yaml:/ros2_ws/install/robocar_bringup/share/robocar_bringup/config/camera_3d_oak.yaml:ro
 
   camera:
     <<: *ros
