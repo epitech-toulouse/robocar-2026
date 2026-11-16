@@ -5,7 +5,7 @@
 /oak:
   ros__parameters:
     camera:
-      i_pipeline_type: RGBD
+      i_pipeline_type: RGB
       i_nn_type: none
       i_usb_speed: HIGH
       # IMU (BMI270) selon la révision : à vérifier (phase 4)
