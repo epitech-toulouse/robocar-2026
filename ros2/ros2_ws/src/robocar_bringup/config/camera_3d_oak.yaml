@@ -6,7 +6,7 @@
     camera:
       i_pipeline_type: RGBD
       i_nn_type: none
-      i_usb_speed: SUPER_PLUS
+      i_usb_speed: HIGH
       # IMU (BMI270) selon la révision : à vérifier (phase 4)
       i_enable_imu: false
       # pas de projecteur IR sur la Lite
