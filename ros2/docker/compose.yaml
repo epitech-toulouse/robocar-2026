@@ -32,6 +32,8 @@ services:
   camera_3d_oak:
     <<: *ros
     profiles: [camera_3d_oak]
+    # Redémarre le driver si le conteneur/camera node termine.
+    restart: unless-stopped
     command: ros2 launch robocar_bringup camera_3d_oak.launch.py
     # L'OAK change d'ID USB au démarrage (bootloader puis application) : accès à tout le bus
     privileged: true
