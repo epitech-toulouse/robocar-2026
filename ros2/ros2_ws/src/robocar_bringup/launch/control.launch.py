@@ -45,11 +45,19 @@ def generate_launch_description():
             name='ackermann_mux',
             parameters=[config + 'mux.yaml'],
         ),
+        # Filet LiDAR final : peut arrêter aussi bien le mode autonome que la manette.
+        Node(
+            package='robocar_autonomy',
+            executable='lidar_safety_gate',
+            name='lidar_safety_gate',
+            parameters=[config + 'safety.yaml'],
+        ),
         Node(
             package='vesc_ackermann',
             executable='ackermann_to_vesc_node',
             name='ackermann_to_vesc_node',
             parameters=[config + 'vesc.yaml'],
+            remappings=[('ackermann_cmd', '/ackermann_cmd_safe')],
         ),
         Node(
             package='vesc_driver',

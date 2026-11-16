@@ -97,6 +97,15 @@ docker compose -f docker/compose.yaml logs -f control                           
 docker compose -f docker/compose.yaml down                                      # tout arrêter
 ```
 
+Pour le suivi autonome des flèches blanches, démarrer toutes les briques ensemble :
+
+```bash
+docker compose -f docker/compose.yaml \
+  --profile control --profile lidar --profile camera_3d_oak --profile autonomy up -d
+```
+
+Le mode autonome publie `/drive` ; maintenir **RB** pour le déverrouiller. Le LiDAR de sécurité reste après le multiplexeur et peut arrêter aussi la conduite manuelle. Le suivi des flèches commence à 0,10 m/s et s'arrête si image, scan ou flèche deviennent trop anciens. Voir `docs/AUTONOMIE.md` avant de rouler.
+
 Chaque brique est un service, activé par son **profil** : `control` (VESC, manette, odométrie, TF), `lidar`, `camera_3d_oak`, `camera`. Lancez seulement ce qui est branché : `control` refuse de démarrer sans `/dev/vesc`.
 
 Au démarrage de `control`, quelques erreurs `Out-of-sync with VESC` sont normales. Elles cessent après `Connected to VESC`.

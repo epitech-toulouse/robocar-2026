@@ -21,6 +21,8 @@ services:
     devices:
       - /dev/vesc
       - /dev/input
+    volumes:
+      - ../ros2_ws/src/robocar_bringup/config/safety.yaml:/ros2_ws/install/robocar_bringup/share/robocar_bringup/config/safety.yaml:ro
 
   lidar:
     <<: *ros
@@ -41,6 +43,13 @@ services:
       - /dev/bus/usb:/dev/bus/usb
       # Charger le YAML depuis l'hôte pour régler la caméra sans reconstruire l'image.
       - ../ros2_ws/src/robocar_bringup/config/camera_3d_oak.yaml:/ros2_ws/install/robocar_bringup/share/robocar_bringup/config/camera_3d_oak.yaml:ro
+
+  autonomy:
+    <<: *ros
+    profiles: [autonomy]
+    command: ros2 launch robocar_bringup autonomy.launch.py
+    volumes:
+      - ../ros2_ws/src/robocar_bringup/config/autonomy.yaml:/ros2_ws/install/robocar_bringup/share/robocar_bringup/config/autonomy.yaml:ro
 
   camera:
     <<: *ros

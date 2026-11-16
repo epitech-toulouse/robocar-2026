@@ -1,0 +1,13 @@
+lidar_safety_gate:
+  ros__parameters:
+    command_topic: /ackermann_cmd
+    scan_topic: /scan
+    safe_command_topic: /ackermann_cmd_safe
+    # Mesuré depuis le LiDAR ; à ajuster selon le freinage réel et le pare-chocs.
+    stop_distance_m: 0.70
+    release_distance_m: 0.95
+    slow_distance_m: 1.50
+    front_half_angle_deg: 25.0
+    rear_half_angle_deg: 25.0
+    scan_timeout_sec: 0.30
+    command_timeout_sec: 0.20
