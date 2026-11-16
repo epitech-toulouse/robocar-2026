@@ -7,8 +7,6 @@
   <maintainer email="jason.chemin@epitech.eu">Jason Chemin</maintainer>
   <license>MIT</license>
 
-  <buildtool_depend>ament_python</buildtool_depend>
-
   <exec_depend>rclpy</exec_depend>
   <exec_depend>ackermann_msgs</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
