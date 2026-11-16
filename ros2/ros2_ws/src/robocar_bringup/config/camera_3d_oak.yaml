@@ -1,4 +1,4 @@
-# OAK-D Lite (depthai_ros_driver 2.x), profil USB 2 réduit pour stabiliser le lien.
+# OAK-D Lite (depthai_ros_driver 2.x), essai USB 3 à charge réduite.
 # Topics : /oak/rgb/*, /oak/stereo/*
 # Exemples de paramètres : dossier share/depthai_ros_driver/config/ du paquet
 # (pas de substitution « dollar-parenthèse » ici, même en commentaire : le launch depthai les interprète)
@@ -7,7 +7,7 @@
     camera:
       i_pipeline_type: RGBD
       i_nn_type: none
-      i_usb_speed: HIGH
+      i_usb_speed: SUPER
       # IMU (BMI270) selon la révision : à vérifier (phase 4)
       i_enable_imu: false
       # pas de projecteur IR sur la Lite
