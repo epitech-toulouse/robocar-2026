@@ -48,8 +48,18 @@ services:
     <<: *ros
     profiles: [autonomy]
     command: ros2 launch robocar_bringup autonomy.launch.py
+    environment:
+      ROBOCAR_BEHAVIORAL_CLONING: ${ROBOCAR_BEHAVIORAL_CLONING:-false}
     volumes:
       - ../ros2_ws/src/robocar_bringup/config/autonomy.yaml:/ros2_ws/install/robocar_bringup/share/robocar_bringup/config/autonomy.yaml:ro
+      - ../models:/models:ro
+
+  recording:
+    <<: *ros
+    profiles: [recording]
+    command: ros2 run robocar_autonomy record_behavioral_demonstrations
+    volumes:
+      - ../dataset_behavioral:/dataset
 
   camera:
     <<: *ros

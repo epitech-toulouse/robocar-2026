@@ -20,3 +20,19 @@ arrow_follow_node:
     wall_clearance_m: 0.60
     wall_avoidance_gain: 0.22
     front_slow_distance_m: 1.40
+
+behavioral_cloning_node:
+  ros__parameters:
+    image_topic: /oak/rgb/image_raw
+    scan_topic: /scan
+    command_topic: /drive
+    status_topic: /autonomy/status
+    model_path: /models/behavioral_cloning.onnx
+    # Hard cap applies even if demonstrations contain larger commands.
+    max_speed_mps: 0.10
+    max_steering_angle_rad: 0.34
+    camera_timeout_sec: 0.5
+    scan_timeout_sec: 0.30
+    # -1 loads the threshold recorded with the trained model.
+    stop_confidence_threshold: -1.0
+    stop_release_threshold: -1.0

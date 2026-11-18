@@ -3,7 +3,7 @@
 <package format="3">
   <name>robocar_autonomy</name>
   <version>0.1.0</version>
-  <description>Suivi de flèches au ruban blanc et arrêt de sécurité LiDAR.</description>
+  <description>Suivi de flèches, clonage comportemental et arrêt de sécurité LiDAR.</description>
   <maintainer email="jason.chemin@epitech.eu">Jason Chemin</maintainer>
   <license>MIT</license>
 
@@ -13,6 +13,7 @@
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>cv_bridge</exec_depend>
   <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
 
   <export>
     <build_type>ament_python</build_type>
