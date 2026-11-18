@@ -23,6 +23,7 @@ class LidarSafetyGate(Node):
         self.declare_parameter('slow_distance_m', 1.50)
         self.declare_parameter('front_half_angle_deg', 25.0)
         self.declare_parameter('rear_half_angle_deg', 25.0)
+        self.declare_parameter('front_corridor_half_width_m', 0.30)
         # Mask the camera body immediately behind the centered LiDAR. These
         # bounds are expressed in the LaserScan frame (x forward, y left).
         self.declare_parameter('self_filter_x_min_m', -0.15)
@@ -36,6 +37,8 @@ class LidarSafetyGate(Node):
         self.slow_distance = float(self.get_parameter('slow_distance_m').value)
         self.front_half_angle = float(self.get_parameter('front_half_angle_deg').value)
         self.rear_half_angle = float(self.get_parameter('rear_half_angle_deg').value)
+        self.front_corridor_half_width = float(
+            self.get_parameter('front_corridor_half_width_m').value)
         self.self_filter_x_min = float(
             self.get_parameter('self_filter_x_min_m').value)
         self.self_filter_x_max = float(
@@ -83,13 +86,16 @@ class LidarSafetyGate(Node):
         self.scan_angle_increment = float(msg.angle_increment)
         self.last_scan_time = self._now()
 
-        front = self.sector_min(-self.front_half_angle, self.front_half_angle)
+        front = self.sector_min(
+            -self.front_half_angle, self.front_half_angle,
+            max_abs_y=self.front_corridor_half_width,
+        )
         if front <= self.stop_distance:
             self.obstacle_latched = True
         elif front >= self.release_distance:
             self.obstacle_latched = False
 
-    def sector_min(self, center_deg, half_angle_deg):
+    def sector_min(self, center_deg, half_angle_deg, max_abs_y=None):
         if self.scan_ranges is None or self.scan_angle_increment == 0.0:
             return math.inf
         center = math.radians(center_deg)
@@ -107,6 +113,8 @@ class LidarSafetyGate(Node):
             # checks active outside its outline.
             point_x = value * math.cos(angle)
             point_y = value * math.sin(angle)
+            if max_abs_y is not None and abs(point_y) > max_abs_y:
+                continue
             inside_self_filter = (
                 self.self_filter_x_min <= point_x <= self.self_filter_x_max and
                 abs(point_y) <= self.self_filter_y_half_width
@@ -143,7 +151,10 @@ class LidarSafetyGate(Node):
 
         half_angle = self.front_half_angle if speed >= 0.0 else self.rear_half_angle
         center = 0.0 if speed >= 0.0 else 180.0
-        clearance = self.sector_min(center, half_angle)
+        clearance = self.sector_min(
+            center, half_angle,
+            max_abs_y=(self.front_corridor_half_width if speed >= 0.0 else None),
+        )
         blocked = self.obstacle_latched if speed >= 0.0 else clearance <= self.stop_distance
         if blocked:
             output.drive.speed = 0.0

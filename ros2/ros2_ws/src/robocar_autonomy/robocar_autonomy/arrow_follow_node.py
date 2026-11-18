@@ -42,6 +42,7 @@ class ArrowFollowNode(Node):
         self.declare_parameter('wall_clearance_m', 0.60)
         self.declare_parameter('wall_avoidance_gain', 0.22)
         self.declare_parameter('front_slow_distance_m', 1.40)
+        self.declare_parameter('front_corridor_half_width_m', 0.30)
 
         self.image_topic = self.get_parameter('image_topic').value
         self.scan_topic = self.get_parameter('scan_topic').value
@@ -56,6 +57,8 @@ class ArrowFollowNode(Node):
         self.wall_clearance_m = float(self.get_parameter('wall_clearance_m').value)
         self.wall_avoidance_gain = float(self.get_parameter('wall_avoidance_gain').value)
         self.front_slow_distance_m = float(self.get_parameter('front_slow_distance_m').value)
+        self.front_corridor_half_width = float(
+            self.get_parameter('front_corridor_half_width_m').value)
         self.roi_top_ratio = float(self.get_parameter('roi_top_ratio').value)
         self.white_saturation_max = int(self.get_parameter('white_saturation_max').value)
         self.white_value_min = int(self.get_parameter('white_value_min').value)
@@ -183,7 +186,7 @@ class ArrowFollowNode(Node):
                          -self.max_steering_angle, self.max_steering_angle)
         return True, steering, mask
 
-    def _sector_min(self, angle_low_deg, angle_high_deg):
+    def _sector_min(self, angle_low_deg, angle_high_deg, max_abs_y=None):
         if self.scan_ranges is None or self.scan_angle_increment == 0.0:
             return math.inf
         low = math.radians(angle_low_deg)
@@ -192,8 +195,10 @@ class ArrowFollowNode(Node):
         for index, distance in enumerate(self.scan_ranges):
             angle = self.scan_angle_min + index * self.scan_angle_increment
             angle = math.atan2(math.sin(angle), math.cos(angle))
-            if low <= angle <= high and math.isfinite(float(distance)) and distance >= 0.0:
-                valid.append(float(distance))
+            value = float(distance)
+            if low <= angle <= high and math.isfinite(value) and value >= 0.0:
+                if max_abs_y is None or abs(value * math.sin(angle)) <= max_abs_y:
+                    valid.append(value)
         return min(valid, default=math.inf)
 
     def command_timer(self):
@@ -215,7 +220,8 @@ class ArrowFollowNode(Node):
         steering = 0.0
         status = 'stopped: waiting for fresh camera, LiDAR, and a white arrow'
         if camera_fresh and scan_fresh and arrow_fresh:
-            front = self._sector_min(-25.0, 25.0)
+            front = self._sector_min(
+                -25.0, 25.0, max_abs_y=self.front_corridor_half_width)
             if front <= self.front_slow_distance_m:
                 speed_scale = clamp(
                     (front - 0.45) / max(self.front_slow_distance_m - 0.45, 0.01),

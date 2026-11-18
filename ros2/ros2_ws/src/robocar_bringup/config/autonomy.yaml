@@ -20,6 +20,7 @@ arrow_follow_node:
     wall_clearance_m: 0.60
     wall_avoidance_gain: 0.22
     front_slow_distance_m: 1.40
+    front_corridor_half_width_m: 0.30
 
 behavioral_cloning_node:
   ros__parameters:

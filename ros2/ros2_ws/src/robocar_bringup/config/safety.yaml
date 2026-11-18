@@ -9,6 +9,8 @@ lidar_safety_gate:
     slow_distance_m: 1.50
     front_half_angle_deg: 25.0
     rear_half_angle_deg: 25.0
+    # Les arrêts frontaux ne prennent en compte que le couloir du véhicule.
+    front_corridor_half_width_m: 0.30
     # Masque le boîtier de la caméra centré juste derrière le LiDAR.
     # Coordonnées dans le repère laser : x avant, y gauche.
     self_filter_x_min_m: -0.15

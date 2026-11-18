@@ -1,1 +1,7 @@
-dataset_lidar
+# Python environments and bytecode
+.venv/
+__pycache__/
+*.py[cod]
+
+# Trained ROS behavioral-cloning export
+/ros2/models/*.onnx
