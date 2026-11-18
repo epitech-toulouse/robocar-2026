@@ -10,8 +10,11 @@ maintenu pour déverrouiller `/drive` dans le multiplexeur.
 
 La brique `control` place `lidar_safety_gate` après le multiplexeur et avant le
 VESC. Elle met la vitesse à zéro si un obstacle est détecté dans le secteur
-avant, si le scan est périmé ou si la commande amont se tait. Elle s'applique
-donc aussi à la conduite manuelle. Les distances de départ sont 0,70 m pour
+de déplacement (avant ou arrière), si le scan est périmé ou si la commande
+amont se tait. Le retour de la caméra centrée derrière le LiDAR est filtré
+selon son empreinte physique dans le plan du scan ; le contrôle arrière reste
+actif autour de cette empreinte. Elle s'applique donc aussi à la conduite
+manuelle. Les distances de départ sont 0,70 m pour
 l'arrêt, 0,95 m pour le redémarrage après arrêt et 1,50 m pour commencer à
 ralentir ; elles se règlent dans `config/safety.yaml`.
 

@@ -23,6 +23,11 @@ class LidarSafetyGate(Node):
         self.declare_parameter('slow_distance_m', 1.50)
         self.declare_parameter('front_half_angle_deg', 25.0)
         self.declare_parameter('rear_half_angle_deg', 25.0)
+        # Mask the camera body immediately behind the centered LiDAR. These
+        # bounds are expressed in the LaserScan frame (x forward, y left).
+        self.declare_parameter('self_filter_x_min_m', -0.15)
+        self.declare_parameter('self_filter_x_max_m', -0.02)
+        self.declare_parameter('self_filter_y_half_width_m', 0.075)
         self.declare_parameter('scan_timeout_sec', 0.30)
         self.declare_parameter('command_timeout_sec', 0.20)
 
@@ -31,8 +36,18 @@ class LidarSafetyGate(Node):
         self.slow_distance = float(self.get_parameter('slow_distance_m').value)
         self.front_half_angle = float(self.get_parameter('front_half_angle_deg').value)
         self.rear_half_angle = float(self.get_parameter('rear_half_angle_deg').value)
+        self.self_filter_x_min = float(
+            self.get_parameter('self_filter_x_min_m').value)
+        self.self_filter_x_max = float(
+            self.get_parameter('self_filter_x_max_m').value)
+        self.self_filter_y_half_width = float(
+            self.get_parameter('self_filter_y_half_width_m').value)
         self.scan_timeout = float(self.get_parameter('scan_timeout_sec').value)
         self.command_timeout = float(self.get_parameter('command_timeout_sec').value)
+
+        if (self.self_filter_x_min >= self.self_filter_x_max or
+                self.self_filter_y_half_width < 0.0):
+            raise ValueError('Invalid LiDAR self-filter bounds')
 
         command_topic = self.get_parameter('command_topic').value
         scan_topic = self.get_parameter('scan_topic').value
@@ -84,7 +99,19 @@ class LidarSafetyGate(Node):
             angle = self.scan_angle_min + index * self.scan_angle_increment
             delta = math.atan2(math.sin(angle - center), math.cos(angle - center))
             value = float(distance)
-            if abs(delta) <= half_width and math.isfinite(value) and value >= 0.0:
+            if abs(delta) > half_width or not math.isfinite(value) or value < 0.0:
+                continue
+
+            # Ignore returns that land inside the camera's physical footprint.
+            # This removes the car's own camera echo while keeping rear obstacle
+            # checks active outside its outline.
+            point_x = value * math.cos(angle)
+            point_y = value * math.sin(angle)
+            inside_self_filter = (
+                self.self_filter_x_min <= point_x <= self.self_filter_x_max and
+                abs(point_y) <= self.self_filter_y_half_width
+            )
+            if not inside_self_filter:
                 distances.append(value)
         return min(distances, default=math.inf)
 

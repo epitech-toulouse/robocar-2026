@@ -9,5 +9,10 @@ lidar_safety_gate:
     slow_distance_m: 1.50
     front_half_angle_deg: 25.0
     rear_half_angle_deg: 25.0
+    # Masque le boîtier de la caméra centré juste derrière le LiDAR.
+    # Coordonnées dans le repère laser : x avant, y gauche.
+    self_filter_x_min_m: -0.15
+    self_filter_x_max_m: -0.02
+    self_filter_y_half_width_m: 0.075
     scan_timeout_sec: 0.30
     command_timeout_sec: 0.20
