@@ -186,18 +186,25 @@ class ArrowFollowNode(Node):
                          -self.max_steering_angle, self.max_steering_angle)
         return True, steering, mask
 
-    def _sector_min(self, angle_low_deg, angle_high_deg, max_abs_y=None):
+    def _sector_min(self, angle_low_deg, angle_high_deg, max_abs_y=None,
+                    center_deg=0.0):
         if self.scan_ranges is None or self.scan_angle_increment == 0.0:
             return math.inf
         low = math.radians(angle_low_deg)
         high = math.radians(angle_high_deg)
+        center = math.radians(center_deg)
         valid = []
         for index, distance in enumerate(self.scan_ranges):
             angle = self.scan_angle_min + index * self.scan_angle_increment
             angle = math.atan2(math.sin(angle), math.cos(angle))
+            relative_angle = math.atan2(
+                math.sin(angle - center), math.cos(angle - center))
             value = float(distance)
-            if low <= angle <= high and math.isfinite(value) and value >= 0.0:
-                if max_abs_y is None or abs(value * math.sin(angle)) <= max_abs_y:
+            if low <= relative_angle <= high and math.isfinite(value) and value >= 0.0:
+                point_x = value * math.cos(angle)
+                point_y = value * math.sin(angle)
+                corridor_y = -point_x * math.sin(center) + point_y * math.cos(center)
+                if max_abs_y is None or abs(corridor_y) <= max_abs_y:
                     valid.append(value)
         return min(valid, default=math.inf)
 
@@ -220,15 +227,6 @@ class ArrowFollowNode(Node):
         steering = 0.0
         status = 'stopped: waiting for fresh camera, LiDAR, and a white arrow'
         if camera_fresh and scan_fresh and arrow_fresh:
-            front = self._sector_min(
-                -25.0, 25.0, max_abs_y=self.front_corridor_half_width)
-            if front <= self.front_slow_distance_m:
-                speed_scale = clamp(
-                    (front - 0.45) / max(self.front_slow_distance_m - 0.45, 0.01),
-                    0.0, 1.0)
-            else:
-                speed_scale = 1.0
-
             left_clearance = self._sector_min(18.0, 70.0)
             right_clearance = self._sector_min(-70.0, -18.0)
             wall_correction = 0.0
@@ -244,6 +242,17 @@ class ArrowFollowNode(Node):
                 -self.max_steering_angle,
                 self.max_steering_angle,
             )
+            front = self._sector_min(
+                -25.0, 25.0,
+                max_abs_y=self.front_corridor_half_width,
+                center_deg=math.degrees(steering),
+            )
+            if front <= self.front_slow_distance_m:
+                speed_scale = clamp(
+                    (front - 0.45) / max(self.front_slow_distance_m - 0.45, 0.01),
+                    0.0, 1.0)
+            else:
+                speed_scale = 1.0
             speed = self.speed_mps * speed_scale
             status = f'following arrow; front={front:.2f}m speed={speed:.2f}m/s'
         elif not scan_fresh:

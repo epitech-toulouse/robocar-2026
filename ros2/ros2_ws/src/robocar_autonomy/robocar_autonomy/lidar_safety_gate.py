@@ -86,19 +86,26 @@ class LidarSafetyGate(Node):
         self.scan_angle_increment = float(msg.angle_increment)
         self.last_scan_time = self._now()
 
+        heading_deg = 0.0
+        if self.last_command is not None:
+            heading_deg = math.degrees(float(self.last_command.drive.steering_angle))
         front = self.sector_min(
-            -self.front_half_angle, self.front_half_angle,
+            heading_deg, self.front_half_angle,
             max_abs_y=self.front_corridor_half_width,
+            corridor_heading_deg=heading_deg,
         )
         if front <= self.stop_distance:
             self.obstacle_latched = True
         elif front >= self.release_distance:
             self.obstacle_latched = False
 
-    def sector_min(self, center_deg, half_angle_deg, max_abs_y=None):
+    def sector_min(self, center_deg, half_angle_deg, max_abs_y=None,
+                   corridor_heading_deg=None):
         if self.scan_ranges is None or self.scan_angle_increment == 0.0:
             return math.inf
         center = math.radians(center_deg)
+        corridor_heading = math.radians(
+            center_deg if corridor_heading_deg is None else corridor_heading_deg)
         half_width = math.radians(half_angle_deg)
         distances = []
         for index, distance in enumerate(self.scan_ranges):
@@ -113,7 +120,11 @@ class LidarSafetyGate(Node):
             # checks active outside its outline.
             point_x = value * math.cos(angle)
             point_y = value * math.sin(angle)
-            if max_abs_y is not None and abs(point_y) > max_abs_y:
+            corridor_y = (
+                -point_x * math.sin(corridor_heading) +
+                point_y * math.cos(corridor_heading)
+            )
+            if max_abs_y is not None and abs(corridor_y) > max_abs_y:
                 continue
             inside_self_filter = (
                 self.self_filter_x_min <= point_x <= self.self_filter_x_max and
@@ -149,11 +160,13 @@ class LidarSafetyGate(Node):
             self.safe_pub.publish(output)
             return
 
+        steering_angle = float(output.drive.steering_angle)
         half_angle = self.front_half_angle if speed >= 0.0 else self.rear_half_angle
-        center = 0.0 if speed >= 0.0 else 180.0
+        center = math.degrees(steering_angle) if speed >= 0.0 else 180.0
         clearance = self.sector_min(
             center, half_angle,
             max_abs_y=(self.front_corridor_half_width if speed >= 0.0 else None),
+            corridor_heading_deg=(center if speed >= 0.0 else None),
         )
         blocked = self.obstacle_latched if speed >= 0.0 else clearance <= self.stop_distance
         if blocked:

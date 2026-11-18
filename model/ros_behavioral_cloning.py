@@ -20,9 +20,11 @@ class RosBehavioralCloning(nn.Module):
             nn.MaxPool2d(kernel_size=2),
             nn.Conv2d(8, 16, kernel_size=3, stride=2, padding=1),
             nn.ReLU(inplace=True),
-            nn.AdaptiveAvgPool2d((4, 6)),
+            # The preceding layers produce a 12x16 map. 3x8 divides it
+            # evenly, so the legacy ONNX exporter can express this as pooling.
+            nn.AdaptiveAvgPool2d((3, 8)),
             nn.Flatten(),
-            nn.Linear(16 * 4 * 6, 64),
+            nn.Linear(16 * 3 * 8, 64),
             nn.ReLU(inplace=True),
         )
         self.scan_encoder = nn.Sequential(

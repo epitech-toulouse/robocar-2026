@@ -255,7 +255,9 @@ def main():
         print('[ERROR] Training produced no model checkpoint.')
         return 1
     model.load_state_dict(best_state)
-    model.eval()
+    # The training device may be CUDA, but exporting with CPU inputs and a
+    # CUDA model mixes devices. Keep export deterministic on CPU.
+    model = model.cpu().eval()
     args.model_out.parent.mkdir(parents=True, exist_ok=True)
     dummy_image = torch.zeros((1, 1, IMAGE_HEIGHT, IMAGE_WIDTH), dtype=torch.float32)
     dummy_scan = torch.ones((1, SCAN_BINS), dtype=torch.float32)
@@ -268,10 +270,11 @@ def main():
             output_names=['actions'],
             opset_version=12,
             do_constant_folding=True,
+            dynamo=False,
         )
     except Exception as exc:
         print(f'[ERROR] ONNX export failed: {exc}')
-        print('Install the onnx package in the training environment, then retry.')
+        print('Check that the onnx package is installed in the training environment.')
         return 1
 
     metadata = {

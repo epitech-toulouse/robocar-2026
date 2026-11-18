@@ -1,0 +1,14 @@
+{
+  "input_image_width": 128,
+  "input_image_height": 96,
+  "scan_bins": 180,
+  "max_range_m": 8.0,
+  "max_speed_mps": 0.5,
+  "max_steering_angle_rad": 0.34,
+  "stop_speed_threshold_mps": 0.025,
+  "stop_confidence_threshold": 0.7,
+  "stop_release_threshold": 0.35,
+  "training_samples": 10368,
+  "stop_samples": 9733,
+  "validation_loss": 0.45840980302948386
+}
